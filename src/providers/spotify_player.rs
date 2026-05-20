@@ -68,11 +68,7 @@ impl LibrespotPlayer {
         username: &str,
         access_token: &str,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<PlaybackEvent>), String> {
-        let mut session_config = SessionConfig::default();
-        if let Ok(client_id) = std::env::var("RSPOTIFY_CLIENT_ID") {
-            session_config.client_id = client_id;
-        }
-
+        let session_config = SessionConfig::default();
         let credentials = Credentials::with_access_token(access_token);
 
         println!(
@@ -85,9 +81,11 @@ impl LibrespotPlayer {
             let _ = std::fs::create_dir_all(&cache_dir);
         }
 
+        // No credentials cache — we always supply a fresh access token,
+        // and stale cached credentials from older sessions would break auth.
         let cache = librespot::core::cache::Cache::new(
             Some(cache_dir.clone()),
-            Some(cache_dir.join("credentials")),
+            None,
             Some(cache_dir.join("volume")),
             Some(1024 * 1024 * 1024),
         )
