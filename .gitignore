@@ -1,0 +1,5 @@
+/target
+/.agents
+.cache
+.spotify_cache
+/spotify-auth-worker

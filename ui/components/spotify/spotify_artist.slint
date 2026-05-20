@@ -1,0 +1,332 @@
+import {
+    ScrollView,
+    VerticalBox,
+    HorizontalBox,
+    ListView,
+} from "std-widgets.slint";
+import { UITrack } from "spotify_search.slint";
+import { SquareCard } from "spotify_dashboard.slint";
+
+export component SpotifyArtist {
+    in property <string> artist-name: "Loading...";
+    in property <image> artist-photo;
+    in property <[UITrack]> top-tracks: [];
+    in property <[UITrack]> albums: [];
+    in property <bool> is-loading: false;
+
+    callback go-back();
+    callback play-track(string);
+    callback open-artist-album(string);   // album ID → album tracks view
+
+    VerticalBox {
+        width: 100%;
+        vertical-stretch: 1;
+        spacing: 10px;
+
+        // --- Nav Bar ---
+        HorizontalBox {
+            alignment: start;
+            padding: 0;
+            padding-bottom: 5px;
+
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: touch-back.pressed ? #ffffff22 : (touch-back.has-hover ? #ffffff11 : transparent);
+                Image {
+                    source: @image-url("../../assets/BackBtn.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: #ffffffcc;
+                }
+
+                touch-back := TouchArea {
+                    clicked => {
+                        root.go-back()
+                    }
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+
+        // --- Two-column layout ---
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 36px;
+
+            // LEFT: Track list + Discography
+            Rectangle {
+                horizontal-stretch: 60;
+                vertical-stretch: 1;
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    VerticalLayout {
+                        // Skeleton loader
+                        if root.is-loading: VerticalLayout {
+                            spacing: 8px;
+                            for i in [1, 2, 3, 4, 5, 6, 7, 8]: Rectangle {
+                                height: 60px;
+                                border-radius: 8px;
+                                background: #ffffff08;
+                                HorizontalLayout {
+                                    padding-left: 15px;
+                                    padding-right: 15px;
+                                    alignment: space-between;
+                                    HorizontalLayout {
+                                        spacing: 15px;
+                                        alignment: start;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            width: 36px;
+                                            Rectangle {
+                                                width: 12px;
+                                                height: 16px;
+                                                border-radius: 4px;
+                                                background: #ffffff11;
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 8px;
+                                            Rectangle {
+                                                width: 150px;
+                                                height: 16px;
+                                                border-radius: 4px;
+                                                background: #ffffff1a;
+                                            }
+
+                                            Rectangle {
+                                                width: 90px;
+                                                height: 12px;
+                                                border-radius: 4px;
+                                                background: #ffffff11;
+                                            }
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 35px;
+                                            height: 14px;
+                                            border-radius: 4px;
+                                            background: #ffffff11;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Real track list
+                        if !root.is-loading: VerticalLayout {
+                            spacing: 0px;
+
+                            // Section header
+                            Text {
+                                text: "POPULAR";
+                                color: #ffffff55;
+                                font-size: 10px;
+                                font-weight: 700;
+                                letter-spacing: 3px;
+                            }
+
+                            Rectangle {
+                                height: 10px;
+                            }
+
+                            VerticalLayout {
+                                for track[index] in root.top-tracks: Rectangle {
+                                    height: 68px;
+
+                                    Rectangle {
+                                        height: 60px;
+                                        background: touch.pressed ? #ffffff22 : (touch.has-hover ? #ffffff11 : transparent);
+                                        border-radius: 8px;
+                                        y: 4px;
+
+                                        HorizontalLayout {
+                                            padding-left: 15px;
+                                            padding-right: 15px;
+                                            alignment: space-between;
+
+                                            HorizontalLayout {
+                                                spacing: 15px;
+                                                alignment: start;
+
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    width: 36px;
+                                                    if !touch.has-hover: Text {
+                                                        text: "\{index + 1}";
+                                                        color: #b3b3b3;
+                                                        font-size: 16px;
+                                                        horizontal-alignment: right;
+                                                    }
+                                                    if  touch.has-hover: Image {
+                                                        source: @image-url("../../assets/PlayBtn.svg");
+                                                        width: 16px;
+                                                        height: 16px;
+                                                        colorize: white;
+                                                    }
+                                                }
+
+                                                // Album art thumbnail
+                                                Rectangle {
+                                                    width: 44px;
+                                                    height: 44px;
+                                                    border-radius: 4px;
+                                                    clip: true;
+                                                    background: #282828;
+                                                    Image {
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        source: track.album-art;
+                                                        image-fit: cover;
+                                                    }
+                                                }
+
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    spacing: 4px;
+                                                    Text {
+                                                        text: track.title;
+                                                        color: touch.has-hover ? #1DB954 : white;
+                                                        font-weight: 600;
+                                                        font-size: 15px;
+                                                        overflow: elide;
+                                                    }
+
+                                                    Text {
+                                                        text: track.artist;
+                                                        color: #b3b3b3;
+                                                        font-size: 13px;
+                                                        overflow: elide;
+                                                    }
+                                                }
+                                            }
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Text {
+                                                    text: track.duration;
+                                                    color: #b3b3b3;
+                                                    font-size: 13px;
+                                                }
+                                            }
+                                        }
+
+                                        touch := TouchArea {
+                                            clicked => {
+                                                root.play-track(track.id)
+                                            }
+                                            mouse-cursor: pointer;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                height: 30px;
+                            }
+
+                            // Discography section
+                            Text {
+                                text: "DISCOGRAPHY";
+                                color: #ffffff55;
+                                font-size: 10px;
+                                font-weight: 700;
+                                letter-spacing: 3px;
+                            }
+
+                            Rectangle {
+                                height: 10px;
+                            }
+
+                            // Horizontal scrollable album grid
+                            Flickable {
+                                height: 200px;
+                                viewport-width: root.albums.length * 150px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    for album in root.albums: SquareCard {
+                                        title: album.title;
+                                        subtitle: album.artist;   // year stored in artist field
+                                        cover-art: album.album-art;
+                                        clicked => {
+                                            root.open-artist-album(album.id)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // RIGHT: Artist info
+            VerticalLayout {
+                horizontal-stretch: 40;
+                alignment: start;
+                spacing: 14px;
+
+                if root.is-loading: VerticalLayout {
+                    spacing: 14px;
+
+                    // Skeleton Photo
+                    Rectangle {
+                        width: 180px;
+                        height: 180px;
+                        border-radius: 90px;
+                        background: #ffffff0a;
+                    }
+
+                    // Skeleton Name
+                    VerticalLayout {
+                        spacing: 4px;
+                        Rectangle {
+                            width: 140px;
+                            height: 24px;
+                            border-radius: 4px;
+                            background: #ffffff1a;
+                        }
+                    }
+                }
+
+                if !root.is-loading: VerticalLayout {
+                    spacing: 14px;
+
+                    // Circular artist photo
+                    Rectangle {
+                        width: 180px;
+                        height: 180px;
+                        border-radius: 90px;
+                        clip: true;
+                        background: #282828;
+                        Image {
+                            width: 100%;
+                            height: 100%;
+                            source: root.artist-photo;
+                            image-fit: cover;
+                        }
+                    }
+
+                    // Name only
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: root.artist-name;
+                            color: white;
+                            font-size: 20px;
+                            font-weight: 800;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

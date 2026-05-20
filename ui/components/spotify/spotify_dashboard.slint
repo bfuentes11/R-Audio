@@ -1,0 +1,389 @@
+import { HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { UITrack } from "spotify_search.slint"; 
+
+// --- NEW: The Skeleton Card ---
+export component SkeletonCard inherits Rectangle {
+    in property <bool> is-artist: false;
+
+    width: 140px;
+    height: 190px;
+    background: #ffffff05; // Very faint glass box
+    border-radius: 12px;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 10px;
+        alignment: start;
+
+        // Skeleton Image
+        Rectangle {
+            width: 120px;
+            height: 120px;
+            border-radius: root.is-artist ? 60px : 8px;
+            background: #ffffff0a;
+        }
+
+        // Skeleton Text Lines
+        VerticalLayout {
+            spacing: 5px;
+            Rectangle {
+                height: 14px;
+                width: 100px;
+                border-radius: 4px;
+                background: #ffffff0a;
+            }
+
+            Rectangle {
+                height: 12px;
+                width: 60px;
+                border-radius: 4px;
+                background: #ffffff0a;
+            }
+        }
+    }
+}
+
+export component SquareCard inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <image> cover-art;
+    in property <bool> is-artist: false;
+
+    callback clicked;
+
+    width: 140px;
+    height: 190px;
+    background: touch.pressed ? #ffffff11 : (touch.has-hover ? #ffffff0a : transparent);
+    border-radius: 12px;
+    animate background { duration: 150ms; }
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 10px;
+        alignment: start;
+        Rectangle {
+            width: 120px;
+            height: 120px;
+            border-radius: root.is-artist ? 60px : 8px;
+            clip: true;
+            background: #282828;
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.cover-art;
+                image-fit: cover;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: root.title;
+                color: white;
+                font-weight: 700;
+                font-size: 14px;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.subtitle;
+                color: #b3b3b3;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked()
+        }
+        mouse-cursor: pointer;
+    }
+}
+
+export component SpotifyDashboard {
+    in property <string> user-name;
+    in property <[UITrack]> recent-tracks: [];
+    in property <[UITrack]> user-playlists: [];
+    in property <[UITrack]> top-artists: [];
+
+    in property <bool> is-loading: true;
+
+    callback go-back();
+    callback open-search();
+    callback play-track(string);
+    callback open-album(string);
+    callback open-playlist(string, string); // (Playlist ID, Snapshot ID)
+    callback open-artist(string);           // Artist ID
+    callback switch-account();
+    callback logout();
+
+    VerticalBox {
+        width: 100%;
+        vertical-stretch: 1;
+        spacing: 20px;
+
+        HorizontalBox {
+            alignment: space-between;
+            padding: 0;
+            padding-bottom: 5px;
+
+            // --- Sleek Back Button ---
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: touch-back.pressed ? #ffffff22 : (touch-back.has-hover ? #ffffff11 : transparent);
+
+                Image {
+                    source: @image-url("../../assets/BackBtn.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: #ffffffcc;
+                }
+
+                touch-back := TouchArea {
+                    clicked => {
+                        root.go-back()
+                    }
+                    mouse-cursor: pointer;
+                }
+            }
+
+            // --- Sleek Search Button ---
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: touch-search.pressed ? #ffffff22 : (touch-search.has-hover ? #ffffff11 : transparent);
+
+                Image {
+                    source: @image-url("../../assets/SearchBtn.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: #ffffffcc;
+                }
+
+                touch-search := TouchArea {
+                    clicked => {
+                        root.open-search()
+                    }
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+
+        Flickable {
+            vertical-stretch: 1;
+            min-height: 0px;
+            viewport-height: scroll-layout.preferred-height;
+            viewport-width: self.width;
+
+            scroll-layout := VerticalLayout {
+                spacing: 30px;
+                padding-bottom: 20px;
+                padding-top: 15px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+
+                    Text {
+                        text: "Welcome, " + root.user-name;
+                        color: white;
+                        font-size: 32px;
+                        font-weight: 800;
+                    }
+
+                    // Account controls
+                    VerticalLayout {
+                        alignment: center;
+                        padding-top: 6px;
+                        HorizontalLayout {
+                            spacing: 12px;
+    
+                            // Switch Account Button
+                            touch-switch := TouchArea {
+                                clicked => { root.switch-account(); }
+                                Rectangle {
+                                    background: touch-switch.has-hover ? #ffffff1a : #ffffff0a;
+                                    border-width: 1px;
+                                    border-color: touch-switch.has-hover ? #ffffff33 : #ffffff15;
+                                    border-radius: 8px;
+                                    height: 32px;
+                                    
+                                    HorizontalLayout {
+                                        padding-left: 14px;
+                                        padding-right: 14px;
+                                        alignment: center;
+                                        Text {
+                                            text: "Switch Account";
+                                            color: white;
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+    
+                            // Log Out Button
+                            touch-logout := TouchArea {
+                                clicked => { root.logout(); }
+                                Rectangle {
+                                    background: touch-logout.has-hover ? #ff444430 : #ff444415;
+                                    border-width: 1px;
+                                    border-color: touch-logout.has-hover ? #ff444450 : #ff444425;
+                                    border-radius: 8px;
+                                    height: 32px;
+    
+                                    HorizontalLayout {
+                                        padding-left: 14px;
+                                        padding-right: 14px;
+                                        alignment: center;
+                                        Text {
+                                            text: "Log Out";
+                                            color: #ff6b6b;
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Row 1: Recently Played ---
+                VerticalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "Recently Played";
+                        color: white;
+                        font-size: 20px;
+                        font-weight: 700;
+                    }
+
+                    if root.is-loading: HorizontalLayout {
+                        spacing: 10px;
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+                    }
+                    if !root.is-loading: Flickable {
+                        height: 190px;
+                        viewport-width: root.recent-tracks.length * 150px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            for item in root.recent-tracks: SquareCard {
+                                title: item.title;
+                                subtitle: item.artist;
+                                cover-art: item.album-art;
+                                clicked => {
+                                    root.open-album(item.id)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Row 2: Your Playlists ---
+                VerticalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "Your Playlists";
+                        color: white;
+                        font-size: 20px;
+                        font-weight: 700;
+                    }
+
+                    if root.is-loading: HorizontalLayout {
+                        spacing: 10px;
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+
+                        SkeletonCard { }
+                    }
+                    if !root.is-loading: Flickable {
+                        height: 190px;
+                        viewport-width: root.user-playlists.length * 150px;
+                        // FIX: Pass the duration field (which holds the Snapshot ID) back to Rust!
+                        HorizontalLayout {
+                            spacing: 10px;
+                            for item in root.user-playlists: SquareCard {
+                                title: item.title;
+                                subtitle: item.artist;
+                                cover-art: item.album-art;
+                                clicked => {
+                                    root.open-playlist(item.id, item.duration)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Row 3: Top Artists ---
+                VerticalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "Top Artists";
+                        color: white;
+                        font-size: 20px;
+                        font-weight: 700;
+                    }
+
+                    if root.is-loading: HorizontalLayout {
+                        spacing: 10px;
+                        SkeletonCard {
+                            is-artist: true;
+                        }
+
+                        SkeletonCard {
+                            is-artist: true;
+                        }
+
+                        SkeletonCard {
+                            is-artist: true;
+                        }
+
+                        SkeletonCard {
+                            is-artist: true;
+                        }
+
+                        SkeletonCard {
+                            is-artist: true;
+                        }
+                    }
+                    if !root.is-loading: Flickable {
+                        height: 190px;
+                        viewport-width: root.top-artists.length * 150px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            for item in root.top-artists: SquareCard {
+                                title: item.title;
+                                subtitle: "Artist";
+                                cover-art: item.album-art;
+                                is-artist: true;
+                                clicked => {
+                                    root.open-artist(item.id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

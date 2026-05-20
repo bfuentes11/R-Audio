@@ -1,0 +1,273 @@
+import {
+    ScrollView,
+    VerticalBox,
+    HorizontalBox,
+    ListView,
+} from "std-widgets.slint";
+import { UITrack } from "spotify_search.slint";
+
+export component SpotifyAlbum {
+    in property <string> album-title: "Loading...";
+    in property <string> album-artist: "Loading...";
+    in property <image> album-cover;
+    in property <[UITrack]> tracks: [];
+    in property <bool> is-loading: false;
+
+    callback go-back();
+    callback play-track(string);
+
+    VerticalBox {
+        width: 100%;
+        vertical-stretch: 1;
+        spacing: 10px;
+
+        // --- Nav Bar (Icon ONLY) ---
+        HorizontalBox {
+            alignment: start;
+            padding: 0;
+            padding-bottom: 5px;
+
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: touch-back.pressed ? #ffffff22 : (touch-back.has-hover ? #ffffff11 : transparent);
+
+                Image {
+                    source: @image-url("../../assets/BackBtn.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: #ffffffcc;
+                }
+
+                touch-back := TouchArea {
+                    clicked => {
+                        root.go-back()
+                    }
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+
+        // --- Two-Column Layout ---
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 40px;
+
+            // LEFT COLUMN: Track List
+            Rectangle {
+                horizontal-stretch: 60;
+                vertical-stretch: 1;
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        // === THE SKELETON LOADER ===
+                        if root.is-loading: VerticalLayout {
+                            spacing: 8px;
+                            // Draw 8 fake rows
+                            for i in [1, 2, 3, 4, 5, 6, 7, 8]: Rectangle {
+                                height: 60px;
+                                border-radius: 8px;
+                                background: #ffffff08;
+
+                                HorizontalLayout {
+                                    padding-left: 15px;
+                                    padding-right: 15px;
+
+                                    HorizontalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: 15px;
+                                        alignment: start;
+                                        // Fake track number
+                                        VerticalLayout {
+                                            alignment: center;
+                                            width: 36px;
+                                            Rectangle {
+                                                width: 12px;
+                                                height: 16px;
+                                                border-radius: 4px;
+                                                background: #ffffff11;
+                                            }
+                                        }
+                                        // Fake title & artist
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 8px;
+                                            Rectangle {
+                                                width: 150px;
+                                                height: 16px;
+                                                border-radius: 4px;
+                                                background: #ffffff1a;
+                                            }
+
+                                            Rectangle {
+                                                width: 90px;
+                                                height: 12px;
+                                                border-radius: 4px;
+                                                background: #ffffff11;
+                                            }
+                                        }
+                                    }
+                                    // Fake duration
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 50px;
+                                        Rectangle {
+                                            width: 35px;
+                                            height: 14px;
+                                            border-radius: 4px;
+                                            background: #ffffff11;
+                                            x: parent.width - self.width;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // === THE REAL TRACKS ===
+                        if !root.is-loading: VerticalLayout {
+                            spacing: 0px;
+                            for track[index] in root.tracks: Rectangle {
+                                height: 68px;
+
+                                Rectangle {
+                                    height: 60px;
+                                    background: touch.pressed ? #ffffff22 : (touch.has-hover ? #ffffff11 : transparent);
+                                    border-radius: 8px;
+                                    y: 4px;
+
+                                    HorizontalLayout {
+                                        padding-left: 15px;
+                                        padding-right: 15px;
+
+                                        // Left Side: Number/Play Icon + Track Info
+                                        HorizontalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: 15px;
+                                            alignment: start;
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                width: 36px;
+
+                                                if !touch.has-hover: Text {
+                                                    text: "\{index + 1}";
+                                                    color: #b3b3b3;
+                                                    font-size: 16px;
+                                                    horizontal-alignment: right;
+                                                }
+                                                if touch.has-hover: Image {
+                                                    source: @image-url("../../assets/PlayBtn.svg");
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    colorize: white;
+                                                }
+                                            }
+
+                                            // Track Name & Artist
+                                            VerticalLayout {
+                                                horizontal-stretch: 1;
+                                                alignment: center;
+                                                spacing: 4px;
+                                                Text {
+                                                    text: track.title;
+                                                    color: touch.has-hover ? #1DB954 : white;
+                                                    font-weight: 600;
+                                                    font-size: 16px;
+                                                    overflow: elide;
+                                                    width: 100%;
+                                                }
+
+                                                Text {
+                                                    text: track.artist;
+                                                    color: #b3b3b3;
+                                                    font-size: 14px;
+                                                    overflow: elide;
+                                                    width: 100%;
+                                                }
+                                            }
+                                        }
+
+                                        // Right Side: Dynamic Track Length 
+                                        VerticalLayout {
+                                            alignment: center;
+                                            width: 50px;
+                                            Text {
+                                                text: track.duration;
+                                                color: #b3b3b3;
+                                                font-size: 14px;
+                                                font-weight: 500;
+                                                horizontal-alignment: right;
+                                            }
+                                        }
+                                    }
+
+                                    touch := TouchArea {
+                                        clicked => {
+                                            root.play-track(track.id)
+                                        }
+                                        mouse-cursor: pointer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // RIGHT COLUMN: Album Info
+            VerticalLayout {
+                horizontal-stretch: 40;
+                alignment: start;
+                spacing: 15px;
+
+                // Album Art
+                Rectangle {
+                    width: 400px;
+                    height: 400px;
+                    border-radius: 12px;
+                    clip: true;
+                    background: #282828;
+                    Image {
+                        width: 100%;
+                        height: 100%;
+                        source: root.album-cover;
+                        image-fit: cover;
+                    }
+                }
+
+                // Album Text
+                VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "ALBUM";
+                        color: white;
+                        font-size: 12px;
+                        font-weight: 700;
+                        letter-spacing: 1px;
+                    }
+
+                    Text {
+                        text: root.album-title;
+                        color: white;
+                        font-size: 24px;
+                        font-weight: 800;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.album-artist;
+                        color: #b3b3b3;
+                        font-size: 16px;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}

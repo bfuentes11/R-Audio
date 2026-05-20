@@ -1,0 +1,152 @@
+import { ScrollView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+export struct UITrack {
+    title: string,
+    artist: string,
+    id: string,
+    artist-id: string,
+    duration: string,
+    album-art: image,
+}
+
+export component SpotifySearch {
+    in property <[UITrack]> search-results: [];
+    in property <bool> has-more: false; 
+
+    callback search-music(string);
+    callback go-back();
+    callback play-track(string); 
+    callback load-more(); 
+
+    VerticalBox {
+        width: 100%;
+        vertical-stretch: 1;
+        spacing: 20px;
+        
+        // --- Nav Bar ---
+        HorizontalBox {
+            alignment: start;
+            padding: 0;
+            padding-bottom: 5px;
+
+            Rectangle {
+                width: 36px; height: 36px; border-radius: 18px;
+                background: touch-back.pressed ? #ffffff22 : (touch-back.has-hover ? #ffffff11 : transparent);
+                Image {
+                    source: @image-url("../../assets/BackBtn.svg");
+                    width: 18px; height: 18px; colorize: #ffffffcc;
+                }
+                touch-back := TouchArea { clicked => { root.go-back() } mouse-cursor: pointer; }
+            }
+            
+            Rectangle { width: 15px; }
+
+            Text {
+                text: "Search";
+                color: white;
+                font-size: 24px;
+                vertical-alignment: center;
+                font-weight: 800;
+            }
+        }
+
+        // --- Custom Glass Search Bar ---
+        HorizontalLayout {
+            spacing: 15px;
+            height: 48px;
+
+            Rectangle {
+                horizontal-stretch: 1; 
+                border-radius: 24px; 
+                background: #ffffff1a; 
+                border-width: 1px;
+                border-color: focus-scope.has-focus ? #1DB954 : #ffffff33; 
+
+                if search_input.text == "" : Text {
+                    x: 20px; text: "What do you want to listen to?"; color: #ffffff66; font-size: 16px; vertical-alignment: center; height: parent.height; font-weight: 600;
+                }
+
+                focus-scope := FocusScope {
+                    width: 100%;
+                    height: 100%;
+                    search_input := TextInput {
+                        x: 20px; 
+                        width: parent.width - 40px; 
+                        height: parent.height; 
+                        vertical-alignment: center; 
+                        font-size: 16px; 
+                        color: white; 
+                        single-line: true;
+                        accepted => { root.search-music(self.text) } 
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 10px; }
+
+        // --- Results List ---
+        ScrollView {
+            vertical-stretch: 1;
+            min-height: 0px;
+            VerticalLayout {
+                spacing: 0px;
+                for track[index] in root.search-results : Rectangle {
+                    height: 68px;
+
+                    Rectangle {
+                        height: 60px;
+                        background: touch.pressed ? #ffffff22 : (touch.has-hover ? #ffffff11 : transparent);
+                        border-radius: 8px;
+                        y: 4px;
+
+                        HorizontalLayout {
+                            padding-left: 15px; padding-right: 15px; alignment: space-between;
+
+                            HorizontalLayout {
+                                spacing: 15px; alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center; width: 36px;
+                                    if !touch.has-hover : Text { text: "\{index + 1}"; color: #b3b3b3; font-size: 16px; horizontal-alignment: right; }
+                                    if  touch.has-hover : Image { source: @image-url("../../assets/PlayBtn.svg"); width: 16px; height: 16px; colorize: white; }
+                                }
+
+                                // Album art thumbnail
+                                Rectangle {
+                                    width: 44px; height: 44px; border-radius: 4px; clip: true; background: #282828;
+                                    Image { width: 100%; height: 100%; source: track.album-art; image-fit: cover; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center; spacing: 4px;
+                                    Text { text: track.title;  color: touch.has-hover ? #1DB954 : white; font-weight: 600; font-size: 15px; overflow: elide; }
+                                    Text { text: track.artist; color: #b3b3b3; font-size: 13px; overflow: elide; }
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: track.duration; color: #b3b3b3; font-size: 13px; }
+                            }
+                        }
+
+                        touch := TouchArea { clicked => { root.play-track(track.id) } mouse-cursor: pointer; }
+                    }
+                }
+
+                if root.has-more : HorizontalLayout {
+                    alignment: center; padding-top: 20px; padding-bottom: 20px; 
+                    Rectangle {
+                        width: 140px; height: 36px; border-radius: 18px; 
+                        background: touch-more.pressed ? #ffffff22 : (touch-more.has-hover ? #ffffff1a : transparent);
+                        border-width: 1px; border-color: touch-more.has-hover ? #ffffff66 : #ffffff33;
+
+                        Text { text: "LOAD MORE"; color: white; font-size: 12px; font-weight: 700; letter-spacing: 2px; horizontal-alignment: center; vertical-alignment: center; }
+                        touch-more := TouchArea { clicked => { root.load-more() } mouse-cursor: pointer; }
+                    }
+                }
+            }
+        }
+    }
+}

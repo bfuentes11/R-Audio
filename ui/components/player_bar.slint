@@ -1,0 +1,546 @@
+import { UITrack } from "spotify/spotify_search.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export component PlayerBar inherits Rectangle {
+    height: 96px;
+    background: #00000033;
+    border-width: 1px;
+    border-color: #ffffff11;
+    drop-shadow-color: #00000066;
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 4px;
+
+    in property <bool> is-playing:          false;
+    in property <string> track-title:         "";
+    in property <string> track-artist:        "";
+    in property <image> album-cover;
+    in property <string> current-time-str:    "0:00";
+    in property <string> total-time-str:      "0:00";
+    in property <float> progress-percent:    0.0;   // 0.0–1.0
+    in-out property <float> volume:          0.8;   // 0.0–1.0
+    in property <string> track-id:            "";
+    in property <[UITrack]> playlists:       [];
+    in-out property <bool> show-actions-menu: false;
+    in property <bool> is-liked:             false;
+    in property <bool> is-saved:             false;
+
+    callback toggle-play();
+    callback next-track();
+    callback prev-track();
+    callback seek(float);
+    callback change-volume(float);
+    callback add-to-liked-songs(string);
+    callback add-to-playlist(string, string);
+    callback expand();
+
+
+    // --- 1. TRUE CENTERED PLAYER CONTROLS (FULL WIDTH CONTAINER) ---
+    VerticalLayout {
+        width: 100%;
+        height: 100%;
+        alignment: center;
+        spacing: 4px;
+        padding-top: 8px;
+
+        // Media Controls Row
+        HorizontalLayout {
+            alignment: center;
+            spacing: 32px;
+
+            // Prev
+            VerticalLayout {
+                alignment: center;
+                prev-btn := TouchArea {
+                    width: 24px;
+                    height: 24px;
+                    clicked => {
+                        root.prev-track()
+                    }
+                    Image {
+                        width: 100%;
+                        height: 100%;
+                        source: @image-url("../assets/Player_PreviousBtn.svg");
+                        colorize: prev-btn.pressed ? #555555 : (prev-btn.has-hover ? white : #aaaaaa);
+                        animate colorize { duration: 100ms; }
+                    }
+                }
+            }
+
+            // Play/Pause
+            VerticalLayout {
+                alignment: center;
+                play-btn := TouchArea {
+                    width: 44px;
+                    height: 44px;
+                    clicked => {
+                        root.toggle-play()
+                    }
+                    Image {
+                        width: 100%;
+                        height: 100%;
+                        source: root.is-playing ? @image-url("../assets/Player_PauseBtn.svg") : @image-url("../assets/Player_PlayBtn.svg");
+                        colorize: play-btn.pressed ? #cccccc : (play-btn.has-hover ? white : #eeeeee);
+                        animate colorize { duration: 100ms; }
+                    }
+                }
+            }
+
+            // Next
+            VerticalLayout {
+                alignment: center;
+                next-btn := TouchArea {
+                    width: 24px;
+                    height: 24px;
+                    clicked => {
+                        root.next-track()
+                    }
+                    Image {
+                        width: 100%;
+                        height: 100%;
+                        source: @image-url("../assets/Player_NextBtn.svg");
+                        colorize: next-btn.pressed ? #555555 : (next-btn.has-hover ? white : #aaaaaa);
+                        animate colorize { duration: 100ms; }
+                    }
+                }
+            }
+        }
+
+        // Spotify-Style Seek Bar Row
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 500px;
+                height: 20px;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    spacing: 12px;
+                    Text {
+                        text: root.current-time-str;
+                        color: #a7a7a7;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        min-width: 35px;
+                        horizontal-alignment: right;
+                    }
+
+                    progress-area := TouchArea {
+                        horizontal-stretch: 1;
+                        height: 20px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.seek(Math.clamp(self.mouse-x / self.width, 0.0, 1.0));
+                        }
+                        moved => {
+                            if (self.pressed) {
+                                root.seek(Math.clamp(self.mouse-x / self.width, 0.0, 1.0));
+                            }
+                        }
+                        Rectangle {
+                            y: (parent.height - self.height) / 2;
+                            width: 100%;
+                            height: progress-area.has-hover ? 6px : 4px;
+                            border-radius: 3px;
+                            background: #4d4d4d;
+                            animate height {
+                                duration: 120ms;
+                                easing: ease-out;
+                            }
+                            Rectangle {
+                                x: 0;
+                                width: parent.width * root.progress-percent;
+                                height: 100%;
+                                border-radius: 3px;
+                                background: progress-area.has-hover ? #1db954 : white;
+                                animate background { duration: 150ms; }
+                            }
+
+                            if (progress-area.has-hover): Rectangle {
+                                x: (parent.width * root.progress-percent) - 6px;
+                                y: (parent.height - self.height) / 2;
+                                width: 12px;
+                                height: 12px;
+                                border-radius: 6px;
+                                background: white;
+                                drop-shadow-blur: 4px;
+                                drop-shadow-color: #00000044;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: root.total-time-str;
+                        color: #a7a7a7;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        min-width: 35px;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 2. LEFT SIDE OVERLAY (Now Playing) ---
+    Rectangle {
+        x: 24px;
+        y: 0;
+        width: 300px;
+        height: 100%;
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: start;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 56px;
+                    height: 56px;
+                    border-radius: 6px;
+                    background: #1a1a1a;
+                    clip: true;
+                    border-width: 1px;
+                    border-color: #ffffff18;
+                    Image {
+                        source: root.album-cover;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: contain;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                Text {
+                    text: root.track-title != "" ? root.track-title : "Not Playing";
+                    color: root.track-title != "" ? white : #555555;
+                    font-size: 14px;
+                    font-weight: 700;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: root.track-artist;
+                    color: #888888;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+            }
+
+            if root.track-title != "": VerticalLayout {
+                alignment: center;
+                actions-btn := TouchArea {
+                    width: 28px;
+                    height: 28px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.show-actions-menu = !root.show-actions-menu;
+                    }
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: 14px;
+                        background: actions-btn.pressed ? #ffffff22 : (actions-btn.has-hover ? #ffffff11 : transparent);
+                        animate background { duration: 150ms; }
+                        
+                        Image {
+                            source: root.is-saved ? @image-url("../assets/CheckBtn.svg") : @image-url("../assets/PlusBtn.svg");
+                            width: 16px;
+                            height: 16px;
+                            colorize: actions-btn.has-hover ? (root.is-saved ? #1db954 : white) : (root.is-saved ? #1db954 : #b3b3b3);
+                            animate colorize { duration: 150ms; }
+                        }
+                    }
+                }
+            }
+
+            if root.track-title != "": VerticalLayout {
+                alignment: center;
+                expand-btn := TouchArea {
+                    width: 28px;
+                    height: 28px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.expand();
+                    }
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: 14px;
+                        background: expand-btn.pressed ? #ffffff22 : (expand-btn.has-hover ? #ffffff11 : transparent);
+                        animate background { duration: 150ms; }
+                        
+                        Path {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 12px;
+                            height: 7px;
+                            commands: "M 2 5 L 6 1 L 10 5";
+                            stroke: expand-btn.has-hover ? white : #b3b3b3;
+                            stroke-width: 2px;
+                            fill: transparent;
+                            animate stroke { duration: 150ms; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 3. RIGHT SIDE OVERLAY (Volume Slider) ---
+    Rectangle {
+        x: parent.width - self.width - 24px;
+        y: 0;
+        width: 160px;
+        height: 100%;
+        HorizontalLayout {
+            alignment: end;
+            spacing: 12px;
+
+            // Volume Icon (Speaker)
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    Path {
+                        width: 100%;
+                        height: 100%;
+                        commands: "M 2 6 L 2 10 L 5 10 L 9 14 L 9 2 L 5 6 Z M 11 4 A 6 6 0 0 1 11 12 M 13 2 A 9 9 0 0 1 13 14";
+                        stroke: root.volume > 0 ? #b3b3b3 : #555555;
+                        stroke-width: 1.5px;
+                        fill: transparent;
+                    }
+                }
+            }
+
+            // Volume Slider Bar
+            VerticalLayout {
+                alignment: center;
+                volume-touch := TouchArea {
+                    width: 100px;
+                    height: 24px;
+                    mouse-cursor: pointer;
+
+                    clicked => {
+                        root.volume = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                        root.change-volume(root.volume);
+                    }
+                    moved => {
+                        if (self.pressed) {
+                            root.volume = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                            root.change-volume(root.volume);
+                        }
+                    }
+
+                    Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        width: 100%;
+                        height: volume-touch.has-hover ? 6px : 4px;
+                        border-radius: 2px;
+                        background: #4d4d4d;
+                        animate height { duration: 120ms; }
+
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * root.volume;
+                            height: 100%;
+                            border-radius: 2px;
+                            background: volume-touch.has-hover ? #1db954 : white;
+                            animate background { duration: 150ms; }
+                        }
+
+                        // Scrubber dot (visible on hover)
+                        if (volume-touch.has-hover): Rectangle {
+                            x: (parent.width * root.volume) - 6px;
+                            y: (parent.height - self.height) / 2;
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 6px;
+                            background: white;
+                            drop-shadow-blur: 4px;
+                            drop-shadow-color: #00000044;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 4. FLOATING ACTIONS MENU (Popup) ---
+    if root.show-actions-menu: Rectangle {
+        x: 24px;
+        y: -210px;
+        width: 260px;
+        height: 200px;
+        background: #181818ee;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #ffffff15;
+        clip: true;
+
+        // Block event fallthrough to elements under the popup
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Add to...";
+                    color: white;
+                    font-size: 13px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                close-menu-btn := TouchArea {
+                    width: 20px;
+                    height: 20px;
+                    mouse-cursor: pointer;
+                    clicked => { root.show-actions-menu = false; }
+                    Text {
+                        text: "×";
+                        color: close-menu-btn.has-hover ? white : #888888;
+                        font-size: 18px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: #ffffff10;
+            }
+
+            liked-option := TouchArea {
+                height: 32px;
+                mouse-cursor: pointer;
+                clicked => {
+                    if (!root.is-liked) {
+                        root.add-to-liked-songs(root.track-id);
+                    }
+                    root.show-actions-menu = false;
+                }
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    border-radius: 6px;
+                    background: liked-option.pressed ? #ffffff22 : (liked-option.has-hover ? #ffffff11 : transparent);
+                    animate background { duration: 100ms; }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        alignment: space-between;
+                        
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            
+                            Text {
+                                text: "♥";
+                                color: root.is-liked ? #1db954 : #b3b3b3;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "Liked Songs";
+                                color: root.is-liked ? #1db954 : white;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Text {
+                            text: root.is-liked ? "✓" : "+";
+                            color: root.is-liked ? #1db954 : #ffffff55;
+                            font-size: 13px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 4px; }
+            Text {
+                text: "PLAYLISTS";
+                color: #ffffff55;
+                font-size: 9px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                min-height: 0px;
+                
+                VerticalLayout {
+                    spacing: 4px;
+                    for p in root.playlists: playlist-item := TouchArea {
+                        height: 28px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (p.artist-id != "present") {
+                                root.add-to-playlist(root.track-id, p.id);
+                            }
+                            root.show-actions-menu = false;
+                        }
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            border-radius: 4px;
+                            background: playlist-item.pressed ? #ffffff22 : (playlist-item.has-hover ? #ffffff11 : transparent);
+                            animate background { duration: 100ms; }
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                alignment: space-between;
+                                
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    
+                                    Text {
+                                        text: "♪";
+                                        color: p.artist-id == "present" ? #1db954 : #b3b3b3;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: p.title;
+                                        color: p.artist-id == "present" ? #1db954 : white;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                Text {
+                                    text: p.artist-id == "present" ? "✓" : "+";
+                                    color: p.artist-id == "present" ? #1db954 : #ffffff55;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

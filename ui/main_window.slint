@@ -1,0 +1,618 @@
+import { ScrollView, VerticalBox } from "std-widgets.slint";
+import { ProviderCard } from "components/provider_card.slint";
+import {
+    SpotifySearch,
+    UITrack,
+} from "components/spotify/spotify_search.slint";
+import { SpotifyDashboard } from "components/spotify/spotify_dashboard.slint";
+import { SpotifyAlbum } from "components/spotify/spotify_album.slint";
+import { SpotifyArtist } from "components/spotify/spotify_artist.slint";
+import { PlayerBar } from "components/player_bar.slint";
+import { SpotifyPairing } from "components/spotify/spotify_pairing.slint";
+import {
+    SpotifyAccounts,
+    UIAccount,
+} from "components/spotify/spotify_accounts.slint";
+import { FullPlayer } from "components/full_player.slint";
+
+export { UITrack, UIAccount }
+
+export component MainWindow inherits Window {
+    preferred-width: 800px;
+    preferred-height: 600px;
+    min-width: 400px;
+    min-height: 300px;
+
+    background: @linear-gradient(180deg, #4E1010 0%, #360D68 100%);
+
+    in-out property <string> active-view: "home";
+    in-out property <bool> player-expanded: false;
+
+    in property <bool> spotify-has-more: false;
+    in property <bool> spotify-is-loading: true;
+    callback toggle-fullscreen();
+
+    in property <string> spotify-user-name: "Bryant";
+    in property <[UITrack]> spotify-recent-tracks: [];
+    in property <[UITrack]> spotify-user-playlists: [];
+    in property <[UITrack]> spotify-top-artists: [];
+    in property <[UITrack]> spotify-search-results: [];
+    in property <string> spotify-album-title;
+    in property <string> spotify-album-artist;
+    in property <image> spotify-album-cover;
+    in property <[UITrack]> spotify-album-tracks: [];
+    in property <bool> spotify-album-is-loading: false;
+
+    // Artist view properties
+    in property <string> spotify-artist-name: "";
+    in property <image> spotify-artist-photo;
+    in property <[UITrack]> spotify-artist-top-tracks: [];
+    in property <[UITrack]> spotify-artist-albums: [];
+    in property <bool> spotify-artist-is-loading: false;
+
+    // Spotify Pairing properties & callbacks
+    in property <image> spotify-pairing-qr-code;
+    in property <string> spotify-pairing-url: "http://r-audio.local:8888";
+    callback spotify-cancel-pairing();
+
+    // Spotify Accounts properties & callbacks
+    in property <[UIAccount]> spotify-accounts: [];
+    callback spotify-select-account(string);
+    callback spotify-logout-account(string);
+    callback spotify-add-account();
+    callback spotify-switch-account();
+
+    callback search-music(string);
+    callback play-track(string);
+    callback load-more();
+    callback open-album(string);
+    callback open-playlist(string, string);
+    callback open-artist(string);
+    callback open-spotify-provider();
+    callback open-album-by-id(string);  // opens an album directly by album ID
+
+    // Player Bar Properties
+    in property <bool> player-is-playing: false;
+    in property <string> player-track-title: "";
+    in property <string> player-track-artist: "";
+    in property <image> player-album-cover;
+    in property <string> player-current-time-str: "0:00";
+    in property <string> player-total-time-str: "0:00";
+    in property <float> player-progress-percent: 0.0;
+    in property <float> player-volume: 0.8;
+    in property <string> player-track-id: "";
+    in property <bool> player-is-liked: false;
+    in property <bool> player-is-saved: false;
+    in property <float> player-spectrum-seed: 1.0;
+
+    callback player-toggle-play();
+    callback player-next-track();
+    callback player-prev-track();
+    callback player-seek(float);
+    callback player-change-volume(float);
+    callback player-add-to-liked-songs(string);
+    callback player-add-to-playlist(string, string);
+
+    // --- ANIMATED BACKGROUND ---
+    // Each orb has two independent angle properties, one for X and one for Y.
+    // Each goes exactly 0deg→360deg so sin/cos always return the same value at
+    // loop start and end — no visible jump, ever.
+    property <angle> ox1: 0deg;
+    property <angle> oy1: 0deg;
+    property <angle> ox2: 0deg;
+    property <angle> oy2: 0deg;
+    property <angle> ox3: 0deg;
+    property <angle> oy3: 0deg;
+    property <angle> ox4: 0deg;
+    property <angle> oy4: 0deg;
+
+    animate ox1 {
+        duration: 14200ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+    animate oy1 {
+        duration: 21700ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+    animate ox2 {
+        duration: 19100ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+    animate oy2 {
+        duration: 12400ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+    animate ox3 {
+        duration: 10800ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+    animate oy3 {
+        duration: 16300ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+    animate ox4 {
+        duration: 17500ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+    animate oy4 {
+        duration: 23100ms;
+        easing: linear;
+        iteration-count: -1;
+    }
+
+    init => {
+        ox1 = 360deg;
+        oy1 = 360deg;
+        ox2 = 360deg;
+        oy2 = 360deg;
+        ox3 = 360deg;
+        oy3 = 360deg;
+        ox4 = 360deg;
+        oy4 = 360deg;
+    }
+
+    // Background Layer
+    Rectangle {
+        width: 100%;
+        height: 100%;
+
+        // Orb 1 — Rich red, top-left
+        Rectangle {
+            x: (parent.width * 0.15 + 110px * Math.sin(root.ox1)) - 220px;
+            y: (parent.height * 0.18 + 75px * Math.cos(root.oy1)) - 220px;
+            width: 440px;
+            height: 440px;
+            border-radius: 220px;
+            background: @radial-gradient(circle, #9b2020bb 0%, #9b202000 100%);
+        }
+
+        // Orb 2 — Deep purple, right
+        Rectangle {
+            x: (parent.width * 0.75 + 130px * Math.cos(root.ox2)) - 200px;
+            y: (parent.height * 0.52 + 95px * Math.sin(root.oy2)) - 200px;
+            width: 400px;
+            height: 400px;
+            border-radius: 200px;
+            background: @radial-gradient(circle, #6020a0bb 0%, #6020a000 100%);
+        }
+
+        // Orb 3 — Magenta, bottom-center
+        Rectangle {
+            x: (parent.width * 0.45 + 150px * Math.sin(root.ox3)) - 170px;
+            y: (parent.height * 0.79 + 55px * Math.cos(root.oy3)) - 170px;
+            width: 340px;
+            height: 340px;
+            border-radius: 170px;
+            background: @radial-gradient(circle, #a0106099 0%, #a0106000 100%);
+        }
+
+        // Orb 4 — Dark indigo, top-right
+        Rectangle {
+            x: (parent.width * 0.85 + 70px * Math.cos(root.ox4)) - 140px;
+            y: (parent.height * 0.14 + 85px * Math.sin(root.oy4)) - 140px;
+            width: 280px;
+            height: 280px;
+            border-radius: 140px;
+            background: @radial-gradient(circle, #20408099 0%, #20408000 100%);
+        }
+
+        // Vignette
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            background: @linear-gradient(180deg, #00000050 0%, #00000000 30%, #00000000 70%, #00000050 100%);
+        }
+    }
+
+    VerticalLayout {
+        width: 100%;
+        height: 100%;
+
+        // =========================================================
+        // --- HOME / LANDING PAGE ---
+        // =========================================================
+        if active-view == "home": VerticalBox {
+            width: 100%;
+            vertical-stretch: 1;
+            spacing: 0px;
+            padding: 0px;
+
+            // Centering spacers
+            Rectangle {
+                vertical-stretch: 1;
+            }
+
+            // App title
+            Text {
+                text: "R·Audio";
+                color: white;
+                font-size: 48px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+
+            // Tagline
+            Text {
+                text: "YOUR MUSIC. ONE PLACE.";
+                color: #ffffff55;
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 4px;
+                horizontal-alignment: center;
+            }
+
+            // Spacer
+            Rectangle {
+                height: 20px;
+            }
+
+            // Thin divider line
+            Rectangle {
+                height: 1px;
+                background: #ffffff18;
+                horizontal-stretch: 1;
+            }
+
+            Rectangle {
+                height: 16px;
+            }
+
+            // Section label
+            Text {
+                text: "SELECT A PROVIDER";
+                color: #ffffff40;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 3px;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                height: 16px;
+            }
+
+            // Provider cards row
+            HorizontalLayout {
+                alignment: center;
+                spacing: 28px;
+
+                ProviderCard {
+                    title: "Spotify";
+                    has-logo: true;
+                    logo-source: @image-url("assets/spotify.svg");
+                    clicked => {
+                        root.open-spotify-provider();
+                    }
+                }
+
+                ProviderCard {
+                    title: "Tidal";
+                    has-logo: true;
+                    logo-source: @image-url("assets/Tidal.png");
+                    brand-color: #000000;
+                    clicked => {
+                    }
+                }
+
+                ProviderCard {
+                    title: "Audible";
+                    has-logo: true;
+                    logo-source: @image-url("assets/Audible.png");
+                    brand-color: #F5A623;
+                    clicked => {
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 16px;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 28px;
+
+                ProviderCard {
+                    title: "Local";
+                    has-logo: true;
+                    logo-source: @image-url("assets/usb.svg");
+                    clicked => {
+                    }
+                }
+
+                Rectangle {
+                    width: 220px;
+                }
+
+                Rectangle {
+                    width: 220px;
+                }
+            }
+
+            Rectangle {
+                height: 16px;
+            }
+
+            // Footer hint
+            Text {
+                text: "More providers coming soon";
+                color: #ffffff28;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+            }
+        }
+
+        // --- SPOTIFY DASHBOARD ---
+        if active-view == "spotify-dashboard": VerticalLayout {
+            vertical-stretch: 1;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            SpotifyDashboard {
+                is-loading: root.spotify-is-loading;
+                user-name: root.spotify-user-name;
+                recent-tracks: root.spotify-recent-tracks;
+                user-playlists: root.spotify-user-playlists;
+                top-artists: root.spotify-top-artists;
+                go-back => {
+                    root.active-view = "home"
+                }
+                open-search => {
+                    root.active-view = "spotify-search"
+                }
+                play-track(id) => {
+                    root.play-track(id)
+                }
+                open-album(id) => {
+                    root.open-album(id)
+                }
+                open-artist(id) => {
+                    root.open-artist(id)
+                }
+                open-playlist(id, snapshot) => {
+                    root.open-playlist(id, snapshot)
+                }
+                switch-account => {
+                    root.spotify-switch-account();
+                }
+                logout => {
+                    root.spotify-logout-account(root.spotify-user-name)
+                }
+            }
+        }
+
+        // --- SPOTIFY SEARCH ---
+        if active-view == "spotify-search": VerticalLayout {
+            vertical-stretch: 1;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            SpotifySearch {
+                search-results: root.spotify-search-results;
+                has-more: root.spotify-has-more;
+                go-back => {
+                    root.active-view = "spotify-dashboard"
+                }
+                search-music(query) => {
+                    root.search-music(query)
+                }
+                play-track(id) => {
+                    root.play-track(id)
+                }
+                load-more => {
+                    root.load-more()
+                }
+            }
+        }
+
+        // --- SPOTIFY ALBUM VIEW ---
+        if active-view == "spotify-album": VerticalLayout {
+            vertical-stretch: 1;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            SpotifyAlbum {
+                album-title: root.spotify-album-title;
+                album-artist: root.spotify-album-artist;
+                album-cover: root.spotify-album-cover;
+                tracks: root.spotify-album-tracks;
+                is-loading: root.spotify-album-is-loading;
+                go-back => {
+                    root.active-view = "spotify-dashboard"
+                }
+                play-track(id) => {
+                    root.play-track(id)
+                }
+            }
+        }
+
+        // --- SPOTIFY ARTIST VIEW ---
+        if active-view == "spotify-artist": VerticalLayout {
+            vertical-stretch: 1;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            SpotifyArtist {
+                artist-name: root.spotify-artist-name;
+                artist-photo: root.spotify-artist-photo;
+                top-tracks: root.spotify-artist-top-tracks;
+                albums: root.spotify-artist-albums;
+                is-loading: root.spotify-artist-is-loading;
+                go-back => {
+                    root.active-view = "spotify-dashboard"
+                }
+                play-track(id) => {
+                    root.play-track(id)
+                }
+                open-artist-album(id) => {
+                    root.open-album-by-id(id)
+                }
+            }
+        }
+
+        // --- SPOTIFY PAIRING SCREEN ---
+        if active-view == "spotify-pairing": VerticalLayout {
+            vertical-stretch: 1;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            alignment: center;
+            SpotifyPairing {
+                qr-code: root.spotify-pairing-qr-code;
+                pairing-url: root.spotify-pairing-url;
+                cancel => {
+                    root.spotify-cancel-pairing();
+                }
+            }
+        }
+
+        // --- SPOTIFY ACCOUNTS SCREEN ---
+        if active-view == "spotify-accounts": VerticalLayout {
+            vertical-stretch: 1;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            padding-left: 20px;
+            padding-right: 20px;
+            alignment: center;
+            SpotifyAccounts {
+                accounts: root.spotify-accounts;
+                select_account(name) => {
+                    root.spotify-select-account(name);
+                }
+                logout_account(name) => {
+                    root.spotify-logout-account(name);
+                }
+                add_account => {
+                    root.spotify-add-account();
+                }
+                cancel => {
+                    root.spotify-cancel-pairing();
+                }
+            }
+        }
+
+        // PlayerBar at the bottom of the VerticalLayout
+        if root.player-track-title != "": PlayerBar {
+            is-playing: root.player-is-playing;
+            track-title: root.player-track-title;
+            track-artist: root.player-track-artist;
+            track-id: root.player-track-id;
+            playlists: root.spotify-user-playlists;
+            album-cover: root.player-album-cover;
+            current-time-str: root.player-current-time-str;
+            total-time-str: root.player-total-time-str;
+            progress-percent: root.player-progress-percent;
+            volume: root.player-volume;
+            is-liked: root.player-is-liked;
+            is-saved: root.player-is-saved;
+
+            toggle-play => {
+                root.player-toggle-play()
+            }
+            next-track => {
+                root.player-next-track()
+            }
+            prev-track => {
+                root.player-prev-track()
+            }
+            seek(val) => {
+                root.player-seek(val)
+            }
+            change-volume(val) => {
+                root.player-change-volume(val)
+            }
+            add-to-liked-songs(tid) => {
+                root.player-add-to-liked-songs(tid)
+            }
+            add-to-playlist(tid, pid) => {
+                root.player-add-to-playlist(tid, pid)
+            }
+            expand => {
+                root.player-expanded = true;
+            }
+        }
+    }
+
+    // Full screen player overlay drawer
+    if root.player-track-title != "": FullPlayer {
+        width: 100%;
+        height: 100%;
+        x: 0;
+        y: root.player-expanded ? 0px : parent.height;
+
+        is-playing: root.player-is-playing;
+        track-title: root.player-track-title;
+        track-artist: root.player-track-artist;
+        track-id: root.player-track-id;
+        album-cover: root.player-album-cover;
+        current-time-str: root.player-current-time-str;
+        total-time-str: root.player-total-time-str;
+        progress-percent: root.player-progress-percent;
+        volume: root.player-volume;
+        is-liked: root.player-is-liked;
+        spectrum-seed: root.player-spectrum-seed;
+
+        toggle-play => {
+            root.player-toggle-play()
+        }
+        next-track => {
+            root.player-next-track()
+        }
+        prev-track => {
+            root.player-prev-track()
+        }
+        seek(val) => {
+            root.player-seek(val)
+        }
+        change-volume(val) => {
+            root.player-change-volume(val)
+        }
+        add-to-liked-songs(tid) => {
+            root.player-add-to-liked-songs(tid)
+        }
+        collapse => {
+            root.player-expanded = false;
+        }
+
+        animate y {
+            duration: 350ms;
+            easing: ease-out;
+        }
+    }
+
+    FocusScope {
+        enabled: true;
+        init => {
+            self.focus();
+        } // Capture focus on startup
+        key-pressed(event) => {
+            if (event.text == Key.F11) {
+                root.toggle-fullscreen();
+                return accept;
+            }
+            if (event.text == Key.Escape && root.player-expanded) {
+                root.player-expanded = false;
+                return accept;
+            }
+            return reject;
+        }
+    }
+}

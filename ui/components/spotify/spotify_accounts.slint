@@ -1,0 +1,226 @@
+export struct UIAccount {
+    name: string,
+    is_active: bool,
+    avatar: image,
+    avatar_letter: string,
+}
+
+export component SpotifyAccounts {
+    in property <[UIAccount]> accounts;
+    callback select_account(string);
+    callback logout_account(string);
+    callback add_account();
+    callback cancel();
+
+    // Centered glassmorphic card container
+    Rectangle {
+        width: 680px;
+        height: 380px;
+        background: #ffffff0b;
+        border-width: 1px;
+        border-color: #ffffff15;
+        border-radius: 20px;
+        clip: true;
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: @linear-gradient(135deg, #ffffff06 0%, #ffffff00 100%);
+            border-radius: 20px;
+        }
+
+        HorizontalLayout {
+            padding: 30px;
+            spacing: 30px;
+            alignment: space-between;
+
+            // Left Side: Text and Instructions
+            VerticalLayout {
+                width: 280px;
+                spacing: 0px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 8px;
+
+                    // Spotify Green Branding Badge
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 6px;
+                        Rectangle {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 6px;
+                            background: #1DB954;
+                            y: 3px;
+                        }
+                        Text {
+                            text: "SPOTIFY ACCOUNTS";
+                            color: #1DB954;
+                            font-size: 11px;
+                            font-weight: 800;
+                            letter-spacing: 2px;
+                        }
+                    }
+
+                    // Main Title
+                    Text {
+                        text: "Who's Listening?";
+                        color: white;
+                        font-size: 28px;
+                        font-weight: 800;
+                    }
+
+                    // Subtitle
+                    Text {
+                        text: "Manage connected Spotify accounts, switch between users, or link a new account.";
+                        color: #ffffffaa;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Back to Home Button
+                touch-back := TouchArea {
+                    clicked => { root.cancel(); }
+                    
+                    Rectangle {
+                        height: 38px;
+                        background: #ffffff0a;
+                        border-width: 1px;
+                        border-color: #ffffff18;
+                        border-radius: 10px;
+                        
+                        Text {
+                            text: "Back to Home";
+                            color: touch-back.has-hover ? white : #ffffff88;
+                            font-size: 13px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // Right Side: Accounts List
+            VerticalLayout {
+                width: 310px;
+                spacing: 12px;
+                alignment: center;
+
+                // Scrollable container for accounts
+                Rectangle {
+                    height: 250px;
+                    background: #00000020;
+                    border-radius: 16px;
+                    border-width: 1px;
+                    border-color: #ffffff10;
+                    clip: true;
+
+                    Flickable {
+                        viewport-height: (root.accounts.length + 1) * 60px;
+                        
+                        VerticalLayout {
+                            padding: 8px;
+                            spacing: 8px;
+
+                            for acc in root.accounts: touch-acc := TouchArea {
+                                clicked => { root.select_account(acc.name); }
+                                
+                                Rectangle {
+                                    height: 50px;
+                                    background: touch-acc.has-hover ? #ffffff15 : #ffffff08;
+                                    border-radius: 10px;
+                                    border-width: acc.is_active ? 1px : 0px;
+                                    border-color: #1DB954;
+                                    
+                                    VerticalLayout {
+                                        alignment: center;
+                                        HorizontalLayout {
+                                            padding-left: 12px;
+                                            padding-right: 12px;
+                                            spacing: 12px;
+                                            alignment: space-between;
+
+                                            // Left: Profile Circle + Name
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                alignment: start;
+
+                                                // Profile Avatar Circle
+                                                Rectangle {
+                                                    width: 32px;
+                                                    height: 32px;
+                                                    border-radius: 16px;
+                                                    background: acc.is_active ? #1DB954 : #ffffff20;
+                                                    clip: true;
+                                                    
+                                                    if acc.avatar.width > 0 : Image {
+                                                        source: acc.avatar;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        image-fit: cover;
+                                                    }
+                                                    
+                                                    if acc.avatar.width == 0 : Text {
+                                                        text: acc.avatar_letter;
+                                                        color: white;
+                                                        font-size: 14px;
+                                                        font-weight: 800;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+
+                                                // Display Name
+                                                Text {
+                                                    text: acc.name;
+                                                    color: white;
+                                                    font-size: 14px;
+                                                    font-weight: 700;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // "+ Add Account" Button
+                            touch-add := TouchArea {
+                                clicked => { root.add_account(); }
+                                
+                                Rectangle {
+                                    height: 50px;
+                                    background: touch-add.has-hover ? #1db95420 : #ffffff05;
+                                    border-radius: 10px;
+                                    border-width: 1px;
+                                    border-color: touch-add.has-hover ? #1DB954 : #ffffff30;
+                                    
+                                    VerticalLayout {
+                                        alignment: center;
+                                        HorizontalLayout {
+                                            padding-left: 12px;
+                                            padding-right: 12px;
+                                            spacing: 12px;
+                                            alignment: center;
+
+                                            Text {
+                                                text: "+ Add Spotify Account";
+                                                color: touch-add.has-hover ? #1DB954 : #ffffffaa;
+                                                font-size: 14px;
+                                                font-weight: 700;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

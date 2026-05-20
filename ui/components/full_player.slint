@@ -1,0 +1,510 @@
+component SpectrumBar inherits Rectangle {
+    in property <length> max-bar-height: 200px;
+    in property <float> height-multiplier: 1.0;
+    in property <angle> angle1;
+    in property <angle> angle2;
+    in property <bool> is-playing: false;
+    in property <float> spectrum-seed: 1.0;
+    
+    background: @linear-gradient(180deg, #ff2a5f 0%, #7f00ffbb 100%);
+    border-radius: 4px;
+    width: 14px;
+    
+    // Animate height dynamically based on play state and wave functions seeded by the track ID
+    height: is-playing ? (max-bar-height * (0.12 + 0.78 * Math.abs(Math.sin(angle1 * spectrum-seed) * 0.6 + Math.cos(angle2 * (2.0 - spectrum-seed)) * 0.4) * height-multiplier)) : 20px;
+    
+    animate height { duration: 180ms; easing: ease-out; }
+}
+
+export component FullPlayer inherits Rectangle {
+    in property <bool> is-playing:          false;
+    in property <string> track-title:         "";
+    in property <string> track-artist:        "";
+    in property <image> album-cover;
+    in property <string> current-time-str:    "0:00";
+    in property <string> total-time-str:      "0:00";
+    in property <float> progress-percent:    0.0;   // 0.0–1.0
+    in-out property <float> volume:          0.8;   // 0.0–1.0
+    in property <string> track-id:            "";
+    in property <bool> is-liked:             false;
+    in property <float> spectrum-seed:        1.0;
+
+    callback toggle-play();
+    callback next-track();
+    callback prev-track();
+    callback seek(float);
+    callback change-volume(float);
+    callback add-to-liked-songs(string);
+    callback collapse();
+
+    // Looping angles at prime-number periods for dynamic, organic waveform movements
+    property <angle> sa1: 0deg;
+    property <angle> sa2: 0deg;
+    property <angle> sa3: 0deg;
+    property <angle> sa4: 0deg;
+    property <angle> sa5: 0deg;
+    property <angle> sa6: 0deg;
+
+    animate sa1 { duration: 2700ms; iteration-count: -1; easing: ease-in-out; }
+    animate sa2 { duration: 3300ms; iteration-count: -1; easing: ease-in-out; }
+    animate sa3 { duration: 1900ms; iteration-count: -1; easing: ease-in-out; }
+    animate sa4 { duration: 4100ms; iteration-count: -1; easing: ease-in-out; }
+    animate sa5 { duration: 2300ms; iteration-count: -1; easing: ease-in-out; }
+    animate sa6 { duration: 3700ms; iteration-count: -1; easing: ease-in-out; }
+
+    init => {
+        sa1 = 360deg;
+        sa2 = 360deg;
+        sa3 = 360deg;
+        sa4 = 360deg;
+        sa5 = 360deg;
+        sa6 = 360deg;
+    }
+
+    background: @linear-gradient(180deg, #160d26fa 0%, #08040dfd 100%);
+
+    // Intercept touch/click events to prevent leakage to elements behind the player
+    TouchArea {
+        width: 100%;
+        height: 100%;
+       // --- BACKGROUND MUSIC SPECTRUM ---
+    HorizontalLayout {
+        alignment: space-around;
+        padding-left: 24px;
+        padding-right: 24px;
+        width: 100%;
+        height: 60%;
+        y: parent.height - self.height;
+        opacity: 0.38;
+
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa2; height-multiplier: 0.5; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa4; height-multiplier: 0.8; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa6; height-multiplier: 0.6; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa5; height-multiplier: 0.9; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa1; height-multiplier: 0.7; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa3; height-multiplier: 0.85; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa5; height-multiplier: 0.55; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa2; height-multiplier: 0.95; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa6; height-multiplier: 0.75; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa3; height-multiplier: 0.65; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa4; height-multiplier: 0.88; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa1; height-multiplier: 0.72; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa4; height-multiplier: 0.62; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa5; height-multiplier: 0.84; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa2; height-multiplier: 0.68; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa6; height-multiplier: 0.92; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa3; height-multiplier: 0.76; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa5; height-multiplier: 0.82; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa3; height-multiplier: 0.58; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa6; height-multiplier: 0.96; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa2; height-multiplier: 0.74; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa1; height-multiplier: 0.64; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa3; height-multiplier: 0.86; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa4; height-multiplier: 0.78; spectrum-seed: root.spectrum-seed; } }
+    }   }
+
+    // --- TOP CONTROL BAR ---
+    HorizontalLayout {
+        y: 24px;
+        width: 100%;
+        padding-left: 28px;
+        padding-right: 28px;
+        alignment: space-between;
+        
+        collapse-btn := TouchArea {
+            width: 44px;
+            height: 44px;
+            mouse-cursor: pointer;
+            clicked => {
+                root.collapse();
+            }
+            
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: 22px;
+                background: collapse-btn.pressed ? #ffffff22 : (collapse-btn.has-hover ? #ffffff11 : transparent);
+                animate background { duration: 150ms; }
+                
+                Path {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 18px;
+                    height: 11px;
+                    commands: "M 2 2 L 9 9 L 16 2";
+                    stroke: collapse-btn.has-hover ? white : #b3b3b3;
+                    stroke-width: 2.5px;
+                    fill: transparent;
+                    animate stroke { duration: 150ms; }
+                }
+            }
+        }
+        
+        Text {
+            text: "NOW PLAYING";
+            color: #ffffff55;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            vertical-alignment: center;
+        }
+        
+        Rectangle {
+            width: 44px;
+            height: 44px;
+        }
+    }
+
+    // --- MAIN VIEWPORT (CENTER ALIGNED) ---
+    VerticalLayout {
+        width: 100%;
+        alignment: center;
+        spacing: 32px;
+        padding-top: 40px;
+        padding-bottom: 20px;
+        
+        // Large Center Album Cover
+        HorizontalLayout {
+            width: 100%;
+            alignment: center;
+            
+            Rectangle {
+                width: 300px;
+                height: 300px;
+                border-radius: 16px;
+                background: #1e1e24;
+                clip: true;
+                border-width: 1px;
+                border-color: #ffffff1c;
+                drop-shadow-color: #0000009c;
+                drop-shadow-blur: 28px;
+                drop-shadow-offset-y: 14px;
+                
+                Image {
+                    source: root.album-cover;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: contain;
+                }
+            }
+        }
+        
+        // Track Information
+        VerticalLayout {
+            width: 100%;
+            spacing: 6px;
+            alignment: center;
+            
+            Text {
+                text: root.track-title != "" ? root.track-title : "Not Playing";
+                color: white;
+                font-size: 24px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            
+            Text {
+                text: root.track-artist;
+                color: #b3b3b3;
+                font-size: 15px;
+                font-weight: 500;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+        
+        // Premium Floating Control Console
+        Rectangle {
+            width: 100%;
+            height: 138px;
+            
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Math.min(800px, parent.width - 48px);
+                background: #ffffff03;
+                border-radius: 24px;
+                border-width: 1px;
+                border-color: #ffffff08;
+                
+                VerticalLayout {
+                    padding-top: 20px;
+                    padding-bottom: 20px;
+                    padding-left: 28px;
+                    padding-right: 28px;
+                    spacing: 16px;
+                    
+                    // Large Seek Slider
+                    HorizontalLayout {
+                        width: 100%;
+                        spacing: 14px;
+                        
+                        Text {
+                            text: root.current-time-str;
+                            color: #a7a7a7;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            min-width: 40px;
+                            horizontal-alignment: right;
+                        }
+                        
+                        progress-area := TouchArea {
+                            horizontal-stretch: 1;
+                            height: 24px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.seek(Math.clamp(self.mouse-x / self.width, 0.0, 1.0));
+                            }
+                            moved => {
+                                if (self.pressed) {
+                                    root.seek(Math.clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                }
+                            }
+                            Rectangle {
+                                y: (parent.height - self.height) / 2;
+                                width: 100%;
+                                height: progress-area.has-hover ? 7px : 5px;
+                                border-radius: 3px;
+                                background: #3d3d3d;
+                                animate height {
+                                    duration: 120ms;
+                                    easing: ease-out;
+                                }
+                                Rectangle {
+                                    x: 0;
+                                    width: parent.width * root.progress-percent;
+                                    height: 100%;
+                                    border-radius: 3px;
+                                    background: progress-area.has-hover ? #1db954 : white;
+                                    animate background { duration: 150ms; }
+                                }
+                                if (progress-area.has-hover): Rectangle {
+                                    x: (parent.width * root.progress-percent) - 7px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 14px;
+                                    height: 14px;
+                                    border-radius: 7px;
+                                    background: white;
+                                    drop-shadow-blur: 4px;
+                                    drop-shadow-color: #00000044;
+                                }
+                            }
+                        }
+                        
+                        Text {
+                            text: root.total-time-str;
+                            color: #a7a7a7;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            min-width: 40px;
+                        }
+                    }
+                    
+                    // Large Controls & Options Row
+                    Rectangle {
+                        height: 58px;
+                        width: 100%;
+                        
+                        // Heart Like Icon (Left)
+                        Rectangle {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            width: 36px;
+                            height: 36px;
+                            
+                            like-btn := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.add-to-liked-songs(root.track-id);
+                                }
+                                Rectangle {
+                                    width: 100%;
+                                    height: 100%;
+                                    border-radius: 18px;
+                                    background: like-btn.pressed ? #ffffff11 : transparent;
+                                    
+                                    Image {
+                                        source: @image-url("../assets/Heart.svg");
+                                        width: 20px;
+                                        height: 20px;
+                                        colorize: root.is-liked ? #1db954 : (like-btn.has-hover ? white : #888888);
+                                        animate colorize { duration: 150ms; }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Prev / Play / Next Group (Center) - True Centered
+                        HorizontalLayout {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            spacing: 32px;
+                            alignment: center;
+                            
+                            // Prev
+                            VerticalLayout {
+                                alignment: center;
+                                prev-btn := TouchArea {
+                                    width: 28px;
+                                    height: 28px;
+                                    clicked => {
+                                        root.prev-track()
+                                    }
+                                    Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: @image-url("../assets/Player_PreviousBtn.svg");
+                                        colorize: prev-btn.pressed ? #555555 : (prev-btn.has-hover ? white : #aaaaaa);
+                                        animate colorize { duration: 100ms; }
+                                    }
+                                }
+                            }
+                            
+                            // Play/Pause
+                            VerticalLayout {
+                                alignment: center;
+                                play-btn := TouchArea {
+                                    width: 58px;
+                                    height: 58px;
+                                    clicked => {
+                                        root.toggle-play()
+                                    }
+                                    Rectangle {
+                                        width: 100%;
+                                        height: 100%;
+                                        border-radius: 29px;
+                                        background: play-btn.has-hover ? white : #eeeeee;
+                                        animate background { duration: 100ms; }
+                                        drop-shadow-color: #00000044;
+                                        drop-shadow-blur: 10px;
+                                        
+                                        if root.is-playing: Rectangle {
+                                            width: 15px;
+                                            height: 18px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            
+                                            Rectangle {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: 5px;
+                                                height: 18px;
+                                                background: #121212;
+                                                border-radius: 1.5px;
+                                            }
+                                            Rectangle {
+                                                x: 10px;
+                                                y: 0px;
+                                                width: 5px;
+                                                height: 18px;
+                                                background: #121212;
+                                                border-radius: 1.5px;
+                                            }
+                                        }
+                                        if !root.is-playing: Path {
+                                            x: (parent.width - self.width) / 2 + 2px; // Visual center offset
+                                            y: (parent.height - self.height) / 2;
+                                            width: 16px;
+                                            height: 18px;
+                                            commands: "M 0 0 L 16 9 L 0 18 Z";
+                                            fill: #121212;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Next
+                            VerticalLayout {
+                                alignment: center;
+                                next-btn := TouchArea {
+                                    width: 28px;
+                                    height: 28px;
+                                    clicked => {
+                                        root.next-track()
+                                    }
+                                    Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: @image-url("../assets/Player_NextBtn.svg");
+                                        colorize: next-btn.pressed ? #555555 : (next-btn.has-hover ? white : #aaaaaa);
+                                        animate colorize { duration: 100ms; }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Volume Slider Group (Right)
+                        HorizontalLayout {
+                            x: parent.width - self.width;
+                            y: (parent.height - self.height) / 2;
+                            alignment: end;
+                            spacing: 8px;
+                            
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    Path {
+                                        width: 100%;
+                                        height: 100%;
+                                        commands: "M 2 6 L 2 10 L 5 10 L 9 14 L 9 2 L 5 6 Z M 11 4 A 6 6 0 0 1 11 12";
+                                        stroke: root.volume > 0 ? #b3b3b3 : #555555;
+                                        stroke-width: 1.5px;
+                                        fill: transparent;
+                                    }
+                                }
+                            }
+                            
+                            VerticalLayout {
+                                alignment: center;
+                                volume-touch := TouchArea {
+                                    width: 90px;
+                                    height: 24px;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.volume = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                                        root.change-volume(root.volume);
+                                    }
+                                    moved => {
+                                        if (self.pressed) {
+                                            root.volume = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                                            root.change-volume(root.volume);
+                                        }
+                                    }
+                                    Rectangle {
+                                        y: (parent.height - self.height) / 2;
+                                        width: 100%;
+                                        height: volume-touch.has-hover ? 6px : 4px;
+                                        border-radius: 2px;
+                                        background: #4d4d4d;
+                                        animate height { duration: 120ms; }
+                                        Rectangle {
+                                            x: 0;
+                                            width: parent.width * root.volume;
+                                            height: 100%;
+                                            border-radius: 2px;
+                                            background: volume-touch.has-hover ? #1db954 : white;
+                                            animate background { duration: 150ms; }
+                                        }
+                                        if (volume-touch.has-hover): Rectangle {
+                                            x: (parent.width * root.volume) - 6px;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 12px;
+                                            height: 12px;
+                                            border-radius: 6px;
+                                            background: white;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

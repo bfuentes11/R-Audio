@@ -1,0 +1,15 @@
+#!/bin/sh
+# R-Audio Bare-Metal X11 Startup Script
+# Place this at /home/kiosk/.xinitrc on the target system
+
+# Disable screen blanking, screensaver, and DPMS power-saving modes
+xset s off
+xset s noblank
+xset -dpms
+
+# Start the openbox window manager in the background to handle full-screen window sizing
+openbox-session &
+
+# Execute the R-Audio player. 
+# Using "exec" makes it replace the shell process, ensuring X11 shuts down if the app exits.
+exec /usr/local/bin/r-audio
