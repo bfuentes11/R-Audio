@@ -71,7 +71,7 @@ async fn initialize_audio_player(
     ui_handle: slint::Weak<MainWindow>,
     go_next: impl Fn() + Clone + Send + 'static,
 ) {
-    println!("[player] Initializing bare-metal Audio Engine for user: {}", user_name);
+    println!("[player] Initializing bare-metal Audio Engine...");
     match LibrespotPlayer::new(&user_name, &token).await {
         Ok((audio_player, mut player_events)) => {
             let player_arc = Arc::new(audio_player);
@@ -314,8 +314,8 @@ async fn run_authenticated_startup(
         *player_lock = None;
         drop(player_lock);
 
-        let librespot_token = spotify_provider.get_access_token().await.expect("Failed to get access token for librespot");
-
+        let librespot_token = spotify_provider.get_access_token().await
+            .expect("Failed to get access token for librespot");
         initialize_audio_player(user_id, librespot_token, player_container.clone(), ui_handle.clone(), go_next).await;
     } else {
         println!("[main] Audio Engine is already active for user ID {}. Skipping player initialization.", user_id);
