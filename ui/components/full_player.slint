@@ -12,8 +12,6 @@ component SpectrumBar inherits Rectangle {
     
     // Animate height dynamically based on play state and wave functions seeded by the track ID
     height: is-playing ? (max-bar-height * (0.12 + 0.78 * Math.abs(Math.sin(angle1 * spectrum-seed) * 0.6 + Math.cos(angle2 * (2.0 - spectrum-seed)) * 0.4) * height-multiplier)) : 20px;
-    
-    animate height { duration: 180ms; easing: ease-out; }
 }
 
 export component FullPlayer inherits Rectangle {
@@ -37,30 +35,6 @@ export component FullPlayer inherits Rectangle {
     callback add-to-liked-songs(string);
     callback collapse();
 
-    // Looping angles at prime-number periods for dynamic, organic waveform movements
-    property <angle> sa1: 0deg;
-    property <angle> sa2: 0deg;
-    property <angle> sa3: 0deg;
-    property <angle> sa4: 0deg;
-    property <angle> sa5: 0deg;
-    property <angle> sa6: 0deg;
-
-    animate sa1 { duration: 2700ms; iteration-count: -1; easing: ease-in-out; }
-    animate sa2 { duration: 3300ms; iteration-count: -1; easing: ease-in-out; }
-    animate sa3 { duration: 1900ms; iteration-count: -1; easing: ease-in-out; }
-    animate sa4 { duration: 4100ms; iteration-count: -1; easing: ease-in-out; }
-    animate sa5 { duration: 2300ms; iteration-count: -1; easing: ease-in-out; }
-    animate sa6 { duration: 3700ms; iteration-count: -1; easing: ease-in-out; }
-
-    init => {
-        sa1 = 360deg;
-        sa2 = 360deg;
-        sa3 = 360deg;
-        sa4 = 360deg;
-        sa5 = 360deg;
-        sa6 = 360deg;
-    }
-
     background: @linear-gradient(180deg, #160d26fa 0%, #08040dfd 100%);
 
     // Intercept touch/click events to prevent leakage to elements behind the player
@@ -77,30 +51,30 @@ export component FullPlayer inherits Rectangle {
         y: parent.height - self.height;
         opacity: 0.38;
 
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa2; height-multiplier: 0.5; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa4; height-multiplier: 0.8; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa6; height-multiplier: 0.6; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa5; height-multiplier: 0.9; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa1; height-multiplier: 0.7; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa3; height-multiplier: 0.85; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa5; height-multiplier: 0.55; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa2; height-multiplier: 0.95; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa6; height-multiplier: 0.75; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa3; height-multiplier: 0.65; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa4; height-multiplier: 0.88; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa1; height-multiplier: 0.72; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa4; height-multiplier: 0.62; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa5; height-multiplier: 0.84; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa2; height-multiplier: 0.68; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa6; height-multiplier: 0.92; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa3; height-multiplier: 0.76; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa5; height-multiplier: 0.82; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa1; angle2: root.sa3; height-multiplier: 0.58; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa3; angle2: root.sa6; height-multiplier: 0.96; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa4; angle2: root.sa2; height-multiplier: 0.74; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa5; angle2: root.sa1; height-multiplier: 0.64; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa2; angle2: root.sa3; height-multiplier: 0.86; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: root.sa6; angle2: root.sa4; height-multiplier: 0.78; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.5; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.8; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.6; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.9; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 2700ms) * 360deg; height-multiplier: 0.7; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.85; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.55; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.95; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.75; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.65; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.88; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 2700ms) * 360deg; height-multiplier: 0.72; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.62; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.84; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.68; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.92; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.76; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.82; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.58; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.96; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.74; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 2700ms) * 360deg; height-multiplier: 0.64; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.86; spectrum-seed: root.spectrum-seed; } }
+        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.78; spectrum-seed: root.spectrum-seed; } }
     }   }
 
     // --- TOP CONTROL BAR ---
