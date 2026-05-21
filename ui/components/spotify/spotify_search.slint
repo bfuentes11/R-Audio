@@ -19,6 +19,7 @@ export component SpotifySearch inherits Rectangle {
     callback go-back();
     callback play-track(string);
     callback load-more();
+    callback open-artist(string);
 
     // Keyboard slide state
     property <bool> keyboard-visible: false;
@@ -155,7 +156,29 @@ export component SpotifySearch inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center; spacing: 4px;
                                     Text { text: track.title;  color: touch.has-hover ? #1DB954 : white; font-weight: 600; font-size: 15px; overflow: elide; }
-                                    Text { text: track.artist; color: #b3b3b3; font-size: 13px; overflow: elide; }
+                                    Rectangle {
+                                        height: artist-text.preferred-height;
+                                        horizontal-stretch: 1;
+                                        artist-text := Text {
+                                            x: 0;
+                                            text: track.artist;
+                                            color: track.artist-id != "" && artist-touch.has-hover ? white : #b3b3b3;
+                                            font-size: 13px;
+                                            overflow: elide;
+                                            width: 100%;
+                                        }
+                                        artist-touch := TouchArea {
+                                            width: artist-text.preferred-width;
+                                            height: parent.height;
+                                            x: 0;
+                                            enabled: track.artist-id != "";
+                                            mouse-cursor: track.artist-id != "" ? pointer : default;
+                                            clicked => {
+                                                root.keyboard-visible = false;
+                                                root.open-artist(track.artist-id);
+                                            }
+                                        }
+                                    }
                                 }
                             }
 

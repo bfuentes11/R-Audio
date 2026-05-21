@@ -20,7 +20,6 @@ pub struct SpotifyAuthManager {
     pub active_user: Arc<Mutex<Option<String>>>,
 }
 
-#[allow(dead_code)]
 impl SpotifyAuthManager {
     pub fn new() -> Self {
         let creds = Credentials::from_env()
@@ -155,18 +154,6 @@ impl SpotifyAuthManager {
         }
     }
 
-    /// Generates the official Spotify Authorization URL
-    pub async fn get_auth_url(&self) -> Result<String, String> {
-        let mut client = self.client.lock().await;
-        client.get_authorize_url(None).map_err(|e| e.to_string())
-    }
-
-    /// Exchanges the callback code for the persistent OAuth token
-    pub async fn complete_auth(&self, _code: &str) -> Result<(), String> {
-        // Token exchange is handled by the Cloudflare Worker (PKCE flow).
-        // This method is unused in the QR-code pairing flow.
-        Ok(())
-    }
 
     pub async fn get_access_token(&self) -> Result<String, String> {
         // Grab the shared token Arc, then release the client mutex immediately so other
@@ -218,6 +205,18 @@ impl SpotifyAuthManager {
 
     pub async fn get_client(&self) -> &Mutex<AuthCodePkceSpotify> {
         &self.client
+    }
+
+    /// Returns when the current access token expires, or `None` if unknown.
+    /// Used by the session manager to schedule a pre-emptive librespot reconnect
+    /// before the token can die under an active stream.
+    pub async fn token_expires_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        let token_arc = {
+            let client = self.client.lock().await;
+            client.get_token()
+        };
+        let guard = token_arc.lock().await.ok()?;
+        guard.as_ref()?.expires_at
     }
 }
 

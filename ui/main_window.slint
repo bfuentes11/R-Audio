@@ -16,6 +16,8 @@ import {
 } from "components/spotify/spotify_accounts.slint";
 import { FullPlayer } from "components/full_player.slint";
 import { SetupWindow } from "setup_window.slint";
+import { WifiSetup } from "components/wifi/wifi_setup.slint";
+import { OobeWelcome } from "components/oobe/oobe_welcome.slint";
 import {
     Settings,
     UIWifiNetwork,
@@ -56,6 +58,14 @@ export component MainWindow inherits Window {
     in property <[UITrack]> spotify-artist-top-tracks: [];
     in property <[UITrack]> spotify-artist-albums: [];
     in property <bool> spotify-artist-is-loading: false;
+
+    // OOBE properties & callbacks
+    in property <image> oobe-wifi-qr-code;
+    in property <string> oobe-wifi-status: "Initializing...";
+    in property <string> oobe-wifi-hotspot-ssid: "R-Audio-Setup";
+    in property <string> oobe-wifi-url: "http://10.42.0.1:8888/wifi";
+    callback oobe-get-started();
+    callback oobe-skip-wifi();
 
     // Spotify Pairing properties & callbacks
     in property <image> spotify-pairing-qr-code;
@@ -112,7 +122,9 @@ export component MainWindow inherits Window {
     callback player-seek(float);
     callback player-change-volume(float);
     callback player-add-to-liked-songs(string);
+    callback player-remove-from-liked-songs(string);
     callback player-add-to-playlist(string, string);
+    callback player-remove-from-playlist(string, string);
 
     // --- ANIMATED BACKGROUND ---
     // Each orb has two independent angle properties, one for X and one for Y.
@@ -237,6 +249,35 @@ export component MainWindow inherits Window {
     VerticalLayout {
         width: 100%;
         height: 100%;
+
+        // =========================================================
+        // --- OOBE WELCOME ---
+        // =========================================================
+        if active-view == "oobe-welcome": Rectangle {
+            vertical-stretch: 1;
+            OobeWelcome {
+                width: 100%;
+                height: 100%;
+                get-started => { root.oobe-get-started(); }
+            }
+        }
+
+        // --- OOBE WI-FI SETUP ---
+        if active-view == "oobe-wifi": Rectangle {
+            vertical-stretch: 1;
+            VerticalLayout {
+                width: 100%;
+                height: 100%;
+                alignment: center;
+                WifiSetup {
+                    qr-code: root.oobe-wifi-qr-code;
+                    hotspot-ssid: root.oobe-wifi-hotspot-ssid;
+                    setup-url: root.oobe-wifi-url;
+                    status-message: root.oobe-wifi-status;
+                    skip => { root.oobe-skip-wifi(); }
+                }
+            }
+        }
 
         // =========================================================
         // --- HOME / LANDING PAGE ---
@@ -492,6 +533,9 @@ export component MainWindow inherits Window {
                 load-more => {
                     root.load-more()
                 }
+                open-artist(id) => {
+                    root.open-artist(id)
+                }
             }
         }
 
@@ -617,8 +661,14 @@ export component MainWindow inherits Window {
             add-to-liked-songs(tid) => {
                 root.player-add-to-liked-songs(tid)
             }
+            remove-from-liked-songs(tid) => {
+                root.player-remove-from-liked-songs(tid)
+            }
             add-to-playlist(tid, pid) => {
                 root.player-add-to-playlist(tid, pid)
+            }
+            remove-from-playlist(tid, pid) => {
+                root.player-remove-from-playlist(tid, pid)
             }
             expand => {
                 root.player-expanded = true;
@@ -663,6 +713,9 @@ export component MainWindow inherits Window {
         }
         add-to-liked-songs(tid) => {
             root.player-add-to-liked-songs(tid)
+        }
+        remove-from-liked-songs(tid) => {
+            root.player-remove-from-liked-songs(tid)
         }
         collapse => {
             root.player-expanded = false;

@@ -74,7 +74,6 @@ impl SpotifyApiService {
 
         match client.current_user().await {
             Ok(user) => {
-                println!("[auth] Spotify account product: {:?}", user.product);
                 let id_str = user.id.to_string();
                 let stripped_id = id_str.strip_prefix("spotify:user:").unwrap_or(&id_str).to_string();
                 Ok(stripped_id)
@@ -519,7 +518,7 @@ impl SpotifyApiService {
 
         let response = self.client.clone()
             .get("https://api.spotify.com/v1/search")
-            .query(&[("q", query), ("type", "track"), ("limit", "20")])
+            .query(&[("q", query), ("type", "track"), ("limit", "10")])
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await
@@ -563,7 +562,7 @@ impl SpotifyApiService {
         Ok(())
     }
 
-    pub async fn add_track_to_playlist(&self, track_id: &str, playlist_id: &str) -> Result<(), String> {
+    pub async fn add_track_to_playlist(&self, track_id: &str, playlist_id: &str) -> Result<String, String> {
         let access_token = self.auth.get_access_token().await?;
         let url = format!("https://api.spotify.com/v1/playlists/{}/tracks", playlist_id);
         let track_uri = format!("spotify:track:{}", track_id);
@@ -578,13 +577,68 @@ impl SpotifyApiService {
             .await
             .map_err(|e| e.to_string())?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
             return Err(format!("Failed to add to playlist ({}): {}", status, text));
         }
 
+        let json: Value = response.json().await.map_err(|e| e.to_string())?;
+        let snapshot_id = json["snapshot_id"].as_str()
+            .ok_or_else(|| "No snapshot_id returned from Spotify API".to_string())?
+            .to_string();
+
+        Ok(snapshot_id)
+    }
+
+    pub async fn remove_track_from_liked_songs(&self, track_id: &str) -> Result<(), String> {
+        let access_token = self.auth.get_access_token().await?;
+
+        let response = self.client.clone()
+            .delete("https://api.spotify.com/v1/me/library")
+            .query(&[("ids", track_id)])
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Length", "0")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed to remove from Liked Songs ({}): {}", status, text));
+        }
+
         Ok(())
+    }
+
+    pub async fn remove_track_from_playlist(&self, track_id: &str, playlist_id: &str) -> Result<String, String> {
+        let access_token = self.auth.get_access_token().await?;
+        let url = format!("https://api.spotify.com/v1/playlists/{}/tracks", playlist_id);
+        let track_uri = format!("spotify:track:{}", track_id);
+
+        let response = self.client.clone()
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .json(&serde_json::json!({
+                "tracks": [{ "uri": track_uri }]
+            }))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed to remove from playlist ({}): {}", status, text));
+        }
+
+        let json: Value = response.json().await.map_err(|e| e.to_string())?;
+        let snapshot_id = json["snapshot_id"].as_str()
+            .ok_or_else(|| "No snapshot_id returned from Spotify API".to_string())?
+            .to_string();
+
+        Ok(snapshot_id)
     }
 
     pub async fn check_track_liked(&self, track_id: &str) -> Result<bool, String> {

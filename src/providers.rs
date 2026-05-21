@@ -23,8 +23,6 @@ pub struct Track {
 #[async_trait::async_trait]
 pub trait AudioProvider {
     async fn search(&self, query: &str) -> Result<Vec<Track>, String>;
-    #[allow(dead_code)]
-    async fn get_audio_stream(&self, track_id: &str) -> Result<Vec<u8>, String>;
 }
 
 pub mod spotify;

@@ -18,6 +18,7 @@ export component FullPlayer inherits Rectangle {
     callback seek(float);
     callback change-volume(float);
     callback add-to-liked-songs(string);
+    callback remove-from-liked-songs(string);
     callback collapse();
 
     // Dark fallback — visible before any album is loaded, and as the base layer

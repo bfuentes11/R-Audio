@@ -27,10 +27,17 @@ librespot-core = "0.4.2"
 librespot-protocol = "0.4.2"
 qrcode-generator = "5.0.0"
 rustfft = "6"
+lru = "0.12"
 # symphonia = "0.5.5"
 
 [build-dependencies]
 slint-build = "1.16.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
 
 [[bin]]
 name = "R-Audio"

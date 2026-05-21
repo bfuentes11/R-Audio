@@ -143,7 +143,28 @@ impl SpotifyProvider {
     }
 
     pub async fn add_track_to_playlist(&self, track_id: &str, playlist_id: &str) -> Result<(), String> {
-        self.api.add_track_to_playlist(track_id, playlist_id).await
+        // Fetch track first to get metadata
+        let track = self.get_track(track_id).await?;
+        // Call API to add
+        let new_snapshot_id = self.api.add_track_to_playlist(track_id, playlist_id).await?;
+        // Update cache
+        self.cache.add_track_to_cached_playlist(playlist_id, &new_snapshot_id, track).await;
+        // Keep user playlists snapshot ID synchronized
+        let username = self.get_cached_username().await;
+        self.cache.update_playlist_snapshot_in_user_playlists(playlist_id, &new_snapshot_id, username.as_deref()).await;
+        Ok(())
+    }
+
+    pub async fn remove_track_from_liked_songs(&self, track_id: &str) -> Result<(), String> {
+        self.api.remove_track_from_liked_songs(track_id).await
+    }
+
+    pub async fn remove_track_from_playlist(&self, track_id: &str, playlist_id: &str) -> Result<(), String> {
+        let new_snapshot_id = self.api.remove_track_from_playlist(track_id, playlist_id).await?;
+        self.cache.remove_track_from_cached_playlist(playlist_id, &new_snapshot_id, track_id).await;
+        let username = self.get_cached_username().await;
+        self.cache.update_playlist_snapshot_in_user_playlists(playlist_id, &new_snapshot_id, username.as_deref()).await;
+        Ok(())
     }
 
     pub async fn check_track_liked(&self, track_id: &str) -> Result<bool, String> {
@@ -163,8 +184,4 @@ impl AudioProvider for SpotifyProvider {
         Ok(tracks)
     }
 
-    #[allow(dead_code)]
-    async fn get_audio_stream(&self, _track_id: &str) -> Result<Vec<u8>, String> {
-        Ok(vec![])
-    }
 }
