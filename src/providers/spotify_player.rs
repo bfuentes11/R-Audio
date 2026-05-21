@@ -7,8 +7,9 @@ use librespot::playback::audio_backend;
 use librespot::playback::config::{AudioFormat, PlayerConfig};
 use librespot::playback::mixer::{Mixer, VolumeGetter, softmixer::SoftMixer};
 use librespot::playback::player::{Player, PlayerEvent};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tokio::sync::Mutex;
+use crate::spectrum_analyzer::CaptureSink;
 
 struct SharedMixer {
     mixer: Arc<Mutex<SoftMixer>>,
@@ -49,6 +50,8 @@ pub struct LibrespotPlayer {
     player: Arc<Mutex<Player>>,
     pub duration_ms: Arc<Mutex<u32>>,
     pub is_playing: Arc<Mutex<bool>>,
+    pub is_playing_atom: Arc<AtomicBool>,
+    pub sample_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
     mixer: Arc<Mutex<SoftMixer>>,
 }
 
@@ -97,20 +100,27 @@ impl LibrespotPlayer {
             mixer: Arc::clone(&mixer_arc),
         });
 
+        let sample_buffer: Arc<std::sync::Mutex<Vec<f32>>> =
+            Arc::new(std::sync::Mutex::new(Vec::with_capacity(176_400)));
+        let capture_buf = Arc::clone(&sample_buffer);
+
         // 0.4.2: Player::new returns (Player, PlayerEventChannel) — no get_player_event_channel()
         let (player, mut raw_channel) = Player::new(player_config, session, volume_ctrl, move || {
-            backend(None, audio_format)
+            let real_sink = backend(None, audio_format);
+            Box::new(CaptureSink { inner: real_sink, buffer: capture_buf })
         });
 
         let player_arc = Arc::new(Mutex::new(player));
         let duration_ms = Arc::new(Mutex::new(0u32));
         let is_playing = Arc::new(Mutex::new(false));
+        let is_playing_atom = Arc::new(AtomicBool::new(false));
         let position_ms = Arc::new(Mutex::new(0u32));
 
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<PlaybackEvent>();
 
         let dur_bg = Arc::clone(&duration_ms);
         let play_bg = Arc::clone(&is_playing);
+        let play_atom_bg = Arc::clone(&is_playing_atom);
         let pos_bg = Arc::clone(&position_ms);
         let tx_bg = event_tx.clone();
 
@@ -124,6 +134,7 @@ impl LibrespotPlayer {
                                 println!("[player] Playing: {}ms", position_ms);
                                 *pos_bg.lock().await  = position_ms;
                                 *play_bg.lock().await = true;
+                                play_atom_bg.store(true, Ordering::Relaxed);
                                 let dur = *dur_bg.lock().await;
                                 let _ = tx_bg.send(PlaybackEvent::Playing { position_ms, duration_ms: dur });
                             }
@@ -131,12 +142,14 @@ impl LibrespotPlayer {
                                 println!("[player] Paused: {}ms", position_ms);
                                 *pos_bg.lock().await  = position_ms;
                                 *play_bg.lock().await = false;
+                                play_atom_bg.store(false, Ordering::Relaxed);
                                 let dur = *dur_bg.lock().await;
                                 let _ = tx_bg.send(PlaybackEvent::Paused { position_ms, duration_ms: dur });
                             }
                             Some(PlayerEvent::Stopped { .. }) => {
                                 println!("[player] Stopped");
                                 *play_bg.lock().await = false;
+                                play_atom_bg.store(false, Ordering::Relaxed);
                                 let _ = tx_bg.send(PlaybackEvent::Stopped);
                             }
                             Some(PlayerEvent::EndOfTrack { .. }) => {
@@ -181,6 +194,8 @@ impl LibrespotPlayer {
                 player: player_arc,
                 duration_ms,
                 is_playing,
+                is_playing_atom,
+                sample_buffer,
                 mixer: mixer_arc,
             },
             event_rx,

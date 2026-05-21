@@ -83,7 +83,8 @@ export component MainWindow inherits Window {
     in property <string> player-track-id: "";
     in property <bool> player-is-liked: false;
     in property <bool> player-is-saved: false;
-    in property <float> player-spectrum-seed: 1.0;
+    in property <[float]> player-spectrum-bands: [];
+    in property <image> player-bg-image;
 
     callback player-toggle-play();
     callback player-next-track();
@@ -568,7 +569,8 @@ export component MainWindow inherits Window {
         progress-percent: root.player-progress-percent;
         volume: root.player-volume;
         is-liked: root.player-is-liked;
-        spectrum-seed: root.player-spectrum-seed;
+        spectrum-bands: root.player-spectrum-bands;
+        bg-image: root.player-bg-image;
 
         toggle-play => {
             root.player-toggle-play()

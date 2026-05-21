@@ -1,19 +1,3 @@
-component SpectrumBar inherits Rectangle {
-    in property <length> max-bar-height: 200px;
-    in property <float> height-multiplier: 1.0;
-    in property <angle> angle1;
-    in property <angle> angle2;
-    in property <bool> is-playing: false;
-    in property <float> spectrum-seed: 1.0;
-    
-    background: @linear-gradient(180deg, #ff2a5f 0%, #7f00ffbb 100%);
-    border-radius: 4px;
-    width: 14px;
-    
-    // Animate height dynamically based on play state and wave functions seeded by the track ID
-    height: is-playing ? (max-bar-height * (0.12 + 0.78 * Math.abs(Math.sin(angle1 * spectrum-seed) * 0.6 + Math.cos(angle2 * (2.0 - spectrum-seed)) * 0.4) * height-multiplier)) : 20px;
-}
-
 export component FullPlayer inherits Rectangle {
     in property <bool> is-playing:          false;
     in property <string> track-title:         "";
@@ -25,7 +9,8 @@ export component FullPlayer inherits Rectangle {
     in-out property <float> volume:          0.8;   // 0.0–1.0
     in property <string> track-id:            "";
     in property <bool> is-liked:             false;
-    in property <float> spectrum-seed:        1.0;
+    in property <[float]> spectrum-bands:    [];
+    in property <image> bg-image;
 
     callback toggle-play();
     callback next-track();
@@ -35,47 +20,56 @@ export component FullPlayer inherits Rectangle {
     callback add-to-liked-songs(string);
     callback collapse();
 
+    // Dark fallback — visible before any album is loaded, and as the base layer
     background: @linear-gradient(180deg, #160d26fa 0%, #08040dfd 100%);
+
+    // Album-derived gradient overlay — stretches to fill; empty image = no-op
+    Image {
+        source: root.bg-image;
+        width: 100%;
+        height: 100%;
+        image-fit: fill;
+    }
 
     // Intercept touch/click events to prevent leakage to elements behind the player
     TouchArea {
         width: 100%;
         height: 100%;
-       // --- BACKGROUND MUSIC SPECTRUM ---
-    HorizontalLayout {
-        alignment: space-around;
-        padding-left: 24px;
-        padding-right: 24px;
-        width: 100%;
-        height: 60%;
-        y: parent.height - self.height;
-        opacity: 0.38;
+        // --- BACKGROUND MUSIC SPECTRUM ---
+        HorizontalLayout {
+            alignment: space-around;
+            padding-left: 24px;
+            padding-right: 24px;
+            width: 100%;
+            height: 72%;
+            y: (parent.height - self.height) / 2;
+            opacity: 0.42;
 
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.5; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.8; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.6; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.9; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 2700ms) * 360deg; height-multiplier: 0.7; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.85; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.55; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.95; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.75; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.65; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.88; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 2700ms) * 360deg; height-multiplier: 0.72; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.62; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.84; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.68; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.92; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.76; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 2300ms) * 360deg; height-multiplier: 0.82; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2700ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.58; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 1900ms) * 360deg; angle2: (animation-tick() / 3700ms) * 360deg; height-multiplier: 0.96; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 4100ms) * 360deg; angle2: (animation-tick() / 3300ms) * 360deg; height-multiplier: 0.74; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 2300ms) * 360deg; angle2: (animation-tick() / 2700ms) * 360deg; height-multiplier: 0.64; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3300ms) * 360deg; angle2: (animation-tick() / 1900ms) * 360deg; height-multiplier: 0.86; spectrum-seed: root.spectrum-seed; } }
-        VerticalLayout { height: 100%; alignment: end; SpectrumBar { max-bar-height: parent.height; is-playing: root.is-playing; angle1: (animation-tick() / 3700ms) * 360deg; angle2: (animation-tick() / 4100ms) * 360deg; height-multiplier: 0.78; spectrum-seed: root.spectrum-seed; } }
-    }   }
+            for band in root.spectrum-bands: Rectangle {
+                width: 14px;
+
+                // Top bar: anchored at the center line, grows upward
+                Rectangle {
+                    width: 14px;
+                    height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
+                    y: parent.height / 2 - self.height;
+                    background: @linear-gradient(180deg, #7f00ffbb 0%, #ff2a5f 100%);
+                    border-radius: 3px;
+                    animate height { duration: 40ms; easing: ease-out; }
+                }
+
+                // Bottom bar: anchored at the center line, grows downward (mirror)
+                Rectangle {
+                    width: 14px;
+                    height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
+                    y: parent.height / 2;
+                    background: @linear-gradient(180deg, #ff2a5f 0%, #7f00ffbb 100%);
+                    border-radius: 3px;
+                    animate height { duration: 40ms; easing: ease-out; }
+                }
+            }
+        }
+    }
 
     // --- TOP CONTROL BAR ---
     HorizontalLayout {

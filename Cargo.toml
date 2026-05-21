@@ -26,6 +26,7 @@ librespot = "0.4.2"
 librespot-core = "0.4.2"
 librespot-protocol = "0.4.2"
 qrcode-generator = "5.0.0"
+rustfft = "6"
 # symphonia = "0.5.5"
 
 [build-dependencies]

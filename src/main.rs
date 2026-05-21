@@ -2,7 +2,7 @@
 
 mod providers;
 mod utils;
-mod spectrum_visualizer;
+mod spectrum_analyzer;
 
 use providers::spotify::SpotifyProvider;
 use providers::{AudioProvider, Track};
@@ -27,6 +27,7 @@ struct TrackItem {
 
 thread_local! {
     static SEARCH_RESULTS_MODEL: std::cell::RefCell<Option<std::rc::Rc<slint::VecModel<UITrack>>>> = std::cell::RefCell::new(None);
+    static SPECTRUM_BANDS_MODEL: std::cell::RefCell<Option<std::rc::Rc<slint::VecModel<f32>>>> = std::cell::RefCell::new(None);
 }
 
 async fn process_tracks(
@@ -75,6 +76,13 @@ async fn initialize_audio_player(
     match LibrespotPlayer::new(&user_name, &token).await {
         Ok((audio_player, mut player_events)) => {
             let player_arc = Arc::new(audio_player);
+
+            // Start (or restart) the FFT loop tied to this player's audio capture buffer
+            spawn_fft_loop(
+                Arc::clone(&player_arc.sample_buffer),
+                Arc::clone(&player_arc.is_playing_atom),
+            );
+
             *player_container.lock().await = Some(Arc::clone(&player_arc));
 
             let ui_events = ui_handle.clone();
@@ -553,6 +561,49 @@ fn spawn_dashboard_loader(
     });
 }
 
+fn spawn_fft_loop(
+    sample_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
+    is_playing_atom: Arc<std::sync::atomic::AtomicBool>,
+) {
+    std::thread::spawn(move || {
+        let mut analyzer = spectrum_analyzer::SpectrumAnalyzer::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+
+            if !is_playing_atom.load(std::sync::atomic::Ordering::Relaxed) {
+                analyzer.reset();
+                let zeros = vec![0.0f32; spectrum_analyzer::NUM_BANDS];
+                let _ = slint::invoke_from_event_loop(move || {
+                    SPECTRUM_BANDS_MODEL.with(|m| {
+                        if let Some(ref model) = *m.borrow() {
+                            model.set_vec(zeros);
+                        }
+                    });
+                });
+                continue;
+            }
+
+            let samples = {
+                let Ok(buf) = sample_buffer.lock() else { continue };
+                buf.clone()
+            };
+
+            if samples.len() < spectrum_analyzer::FFT_SIZE * 2 {
+                continue;
+            }
+
+            let bands = analyzer.process(&samples);
+            let _ = slint::invoke_from_event_loop(move || {
+                SPECTRUM_BANDS_MODEL.with(|m| {
+                    if let Some(ref model) = *m.borrow() {
+                        model.set_vec(bands);
+                    }
+                });
+            });
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<(), slint::PlatformError> {
     dotenvy::dotenv().ok();
@@ -561,6 +612,15 @@ async fn main() -> Result<(), slint::PlatformError> {
     let ui = MainWindow::new()?;
     let spotify = Arc::new(SpotifyProvider::new());
     let player: Arc<Mutex<Option<Arc<LibrespotPlayer>>>> = Arc::new(Mutex::new(None));
+
+    // Initialize spectrum bands model (24 bands, all silent)
+    let bands_model = std::rc::Rc::new(slint::VecModel::from(
+        vec![0.0f32; spectrum_analyzer::NUM_BANDS]
+    ));
+    ui.set_player_spectrum_bands(bands_model.clone().into());
+    SPECTRUM_BANDS_MODEL.with(|m| {
+        *m.borrow_mut() = Some(bands_model);
+    });
 
     let ui_handle = ui.as_weak();
     
@@ -1174,8 +1234,6 @@ async fn main() -> Result<(), slint::PlatformError> {
             let q = Arc::clone(&q);
             let ui_c = ui_handle.clone();
 
-            let seed = spectrum_visualizer::get_spectrum_seed(&track_id);
-
             let p_play = Arc::clone(&p);
             let t_id_play = track_id.clone();
             tokio::spawn(async move {
@@ -1188,14 +1246,12 @@ async fn main() -> Result<(), slint::PlatformError> {
             });
 
             let ui_active = ui_c.clone();
-            let seed_clone = seed;
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_active.upgrade() {
                     ui.set_player_is_playing(false);
                     ui.set_player_progress_percent(0.0);
                     ui.set_player_current_time_str("0:00".into());
                     ui.set_player_total_time_str("--:--".into());
-                    ui.set_player_spectrum_seed(seed_clone);
                 }
             });
 
@@ -1235,12 +1291,16 @@ async fn main() -> Result<(), slint::PlatformError> {
                         let ui_img = ui_handle_outer_clone.clone();
                         let t_id = track.id.clone();
                         let t_url = track.album_url.clone();
-                        
+
                         tokio::spawn(async move {
                             if let Some(buf) = utils::fetch_and_cache_image(&t_id, &t_url).await {
+                                // Extract dominant colour then build gradient image before buf is moved
+                                let (h, s, v) = utils::extract_dominant_hsv(&buf);
+                                let gradient = utils::build_album_gradient_image(h, s, v);
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(ui) = ui_img.upgrade() {
                                         ui.set_player_album_cover(slint::Image::from_rgba8(buf));
+                                        ui.set_player_bg_image(slint::Image::from_rgba8(gradient));
                                     }
                                 });
                             }
