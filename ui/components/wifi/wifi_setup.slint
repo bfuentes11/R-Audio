@@ -1,0 +1,232 @@
+export component WifiSetup {
+    in property <image> qr-code;
+    in property <string> hotspot-ssid: "R-Audio-Setup";
+    in property <string> hotspot-password: "";
+    in property <string> setup-url: "http://10.42.0.1:8888/wifi";
+    in property <string> status-message: "Waiting for client connection...";
+    callback skip();
+
+    // Centered glassmorphic card container
+    Rectangle {
+        width: 680px;
+        height: 380px;
+        background: #ffffff0b;
+        border-width: 1px;
+        border-color: #ffffff15;
+        border-radius: 20px;
+        clip: true;
+
+        // Subtle gradient overlay for extra premium look
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: @linear-gradient(135deg, #ffffff06 0%, #ffffff00 100%);
+            border-radius: 20px;
+        }
+
+        HorizontalLayout {
+            padding: 30px;
+            spacing: 30px;
+            alignment: space-between;
+
+            // Left Side: Text and Instructions
+            VerticalLayout {
+                width: 340px;
+                spacing: 0px;
+                alignment: space-between;
+
+                VerticalLayout {
+                    spacing: 8px;
+
+                    // Network Blue Branding Badge
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 6px;
+                        Rectangle {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 6px;
+                            background: #2b7bc5;
+                            y: 3px;
+                        }
+                        Text {
+                            text: "NETWORK SETUP";
+                            color: #4b9beb;
+                            font-size: 11px;
+                            font-weight: 800;
+                            letter-spacing: 2px;
+                        }
+                    }
+
+                    // Main Title
+                    Text {
+                        text: "Connect to Wi-Fi";
+                        color: white;
+                        font-size: 28px;
+                        font-weight: 800;
+                    }
+
+                    // Subtitle
+                    Text {
+                        text: "This kiosk needs to be connected to the internet to access Spotify streaming services.";
+                        color: #ffffffaa;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Interactive Instructions Checklist
+                VerticalLayout {
+                    spacing: 12px;
+
+                    // Step 1
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+                        Rectangle {
+                            width: 22px;
+                            height: 22px;
+                            border-radius: 11px;
+                            background: #ffffff12;
+                            Text {
+                                text: "1";
+                                color: white;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Connect your phone/laptop to hotspot:";
+                                color: #ffffffdd;
+                                font-size: 13px;
+                            }
+                            Text {
+                                text: "SSID: " + root.hotspot-ssid + (root.hotspot-password != "" ? " | Pass: " + root.hotspot-password : " (No password)");
+                                color: #4b9beb;
+                                font-size: 12px;
+                                font-weight: 700;
+                            }
+                        }
+                    }
+
+                    // Step 2
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+                        Rectangle {
+                            width: 22px;
+                            height: 22px;
+                            border-radius: 11px;
+                            background: #ffffff12;
+                            Text {
+                                text: "2";
+                                color: white;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: "Scan QR code or go to " + root.setup-url;
+                            color: #ffffffdd;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Step 3
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+                        Rectangle {
+                            width: 22px;
+                            height: 22px;
+                            border-radius: 11px;
+                            background: #4b9beb20;
+                            border-width: 1px;
+                            border-color: #2b7bc560;
+                            Text {
+                                text: "3";
+                                color: #4b9beb;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: root.status-message;
+                            color: #4b9beb;
+                            font-size: 13px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Skip Button
+                TouchArea {
+                    clicked => { root.skip(); }
+                    
+                    Rectangle {
+                        height: 38px;
+                        background: #ffffff0a;
+                        border-width: 1px;
+                        border-color: #ffffff18;
+                        border-radius: 10px;
+                        
+                        Text {
+                            text: "Skip Setup (Offline Mode)";
+                            color: #ffffff88;
+                            font-size: 13px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // Right Side: QR Code Container
+            VerticalLayout {
+                alignment: center;
+
+                // QR Code Container with sleek glow border
+                Rectangle {
+                    width: 200px;
+                    height: 200px;
+                    background: #00000030;
+                    border-width: 2px;
+                    border-color: #ffffff15;
+                    border-radius: 16px;
+
+                    // Display QR Image
+                    Image {
+                        source: root.qr-code;
+                        width: 180px;
+                        height: 180px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    // Sleek Loader Spinner if QR is not loaded yet
+                    if root.qr-code.width == 0: VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Generating QR...";
+                            color: #ffffff44;
+                            font-size: 13px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

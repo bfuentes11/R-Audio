@@ -16,6 +16,7 @@ set -e
 DEBIAN_VERSION="bookworm"
 IMAGE_DIR="r-audio-iso-build"
 BINARY_PATH="../target/release/R-Audio"
+SETUP_BINARY_PATH="../target/release/r-audio-setup"
 
 echo "=== R-Audio Kiosk ISO Build Utility ==="
 
@@ -25,9 +26,9 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-if [ ! -f "$BINARY_PATH" ]; then
-  echo "ERROR: Compiled release binary not found at $BINARY_PATH."
-  echo "Please build the release binary first by running: cargo build --release"
+if [ ! -f "$BINARY_PATH" ] || [ ! -f "$SETUP_BINARY_PATH" ]; then
+  echo "ERROR: Compiled release binaries not found."
+  echo "Please build the release binaries first by running: cargo build --release"
   exit 1
 fi
 
@@ -61,16 +62,21 @@ openbox
 alsa-utils
 pulseaudio
 
-# Local Networking & mDNS pairing resolution
+# Local Networking, mDNS pairing & Wifi management
 avahi-daemon
 libavahi-compat-libdnssd1
 dbus-x11
+network-manager
 
 # System essentials
 ca-certificates
 curl
 wget
 sudo
+
+# Bluetooth support
+bluez
+bluez-tools
 EOF
 
 # 4. Inject Kiosk OS files directly into the target filesystem
@@ -88,11 +94,29 @@ mkdir -p "$INCLUDES/home/kiosk"
 cp "../$BINARY_PATH" "$INCLUDES/usr/local/bin/r-audio"
 chmod +x "$INCLUDES/usr/local/bin/r-audio"
 
+# Copy the Wi-Fi setup Rust binary
+cp "../$SETUP_BINARY_PATH" "$INCLUDES/usr/local/bin/r-audio-setup"
+chmod +x "$INCLUDES/usr/local/bin/r-audio-setup"
+
+# Copy the launcher orchestrator script
+cp ../kiosk-os/r-audio-launcher.sh "$INCLUDES/usr/local/bin/r-audio-launcher"
+chmod +x "$INCLUDES/usr/local/bin/r-audio-launcher"
+
 # Copy the custom systemd player service
 cp ../r-audio.service "$INCLUDES/etc/systemd/system/r-audio.service"
 
 # Copy the environment file template as the active configuration
 cp ../r-audio.env.template "$INCLUDES/etc/default/r-audio"
+
+# Configure custom system hostname (r-audio.local resolving)
+echo "r-audio" > "$INCLUDES/etc/hostname"
+cat <<EOF > "$INCLUDES/etc/hosts"
+127.0.0.1   localhost r-audio
+::1         localhost ip6-localhost ip6-loopback
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
+EOF
+
 
 # Copy the X11 bare startup script
 cp ../xinitrc "$INCLUDES/home/kiosk/.xinitrc"
@@ -127,9 +151,10 @@ useradd -m -s /bin/bash -g users -G sudo,audio,video kiosk
 chown -R kiosk:users /home/kiosk
 chmod +x /home/kiosk/.xinitrc
 
-# Enable the r-audio and avahi system services
+# Enable services
 systemctl enable r-audio
 systemctl enable avahi-daemon
+systemctl enable NetworkManager
 EOF
 chmod +x config/hooks/normal/0900-create-kiosk-user.hook.chroot
 

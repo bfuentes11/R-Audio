@@ -31,3 +31,12 @@ rustfft = "6"
 
 [build-dependencies]
 slint-build = "1.16.1"
+
+[[bin]]
+name = "R-Audio"
+path = "src/main.rs"
+
+[[bin]]
+name = "r-audio-setup"
+path = "src/setup/main.rs"
+

@@ -169,9 +169,14 @@ impl SpotifyAuthManager {
     }
 
     pub async fn get_access_token(&self) -> Result<String, String> {
-        let client = self.client.lock().await;
-        
-        let token_arc = client.get_token();
+        // Grab the shared token Arc, then release the client mutex immediately so other
+        // concurrent callers (parallel page fetches, album-art metadata, etc.) aren't
+        // serialized behind us while we read the token or do a network refresh.
+        let token_arc = {
+            let client = self.client.lock().await;
+            client.get_token()
+        };
+
         let is_expired = {
             let token_guard = token_arc.lock().await
                 .map_err(|_| "Failed to lock token".to_string())?;
@@ -181,8 +186,11 @@ impl SpotifyAuthManager {
             }
         };
 
-        // Only trigger an actual API refresh request if the token is expired
+        // Only trigger an actual API refresh request if the token is expired.
+        // Re-acquire the client lock briefly for the refresh; other readers of the
+        // token can proceed in parallel on the fast (non-expired) path above.
         if is_expired {
+            let client = self.client.lock().await;
             let _ = client.refresh_token().await;
         }
 

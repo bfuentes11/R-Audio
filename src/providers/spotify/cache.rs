@@ -55,9 +55,7 @@ impl SpotifyCache {
         {
             let mem = self.playlist_mem_cache.lock().await;
             if let Some(cached) = mem.get(playlist_id) {
-                if cached.2 == snapshot_id {
-                    return Some(cached.clone());
-                }
+                return Some(cached.clone());
             }
         }
 

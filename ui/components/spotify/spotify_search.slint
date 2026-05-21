@@ -1,4 +1,5 @@
-import { ScrollView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { ScrollView, HorizontalBox, VerticalBox, LineEdit } from "std-widgets.slint";
+import { VirtualKeyboard } from "../keyboard/keyboard.slint";
 
 export struct UITrack {
     title: string,
@@ -9,20 +10,31 @@ export struct UITrack {
     album-art: image,
 }
 
-export component SpotifySearch {
+export component SpotifySearch inherits Rectangle {
     in property <[UITrack]> search-results: [];
-    in property <bool> has-more: false; 
+    in property <bool> has-more: false;
+    in-out property <string> search-query: "";
 
     callback search-music(string);
     callback go-back();
-    callback play-track(string); 
-    callback load-more(); 
+    callback play-track(string);
+    callback load-more();
+
+    // Keyboard slide state
+    property <bool> keyboard-visible: false;
+    property <length> keyboard-height: 310px;
+
+    private property <length> text-input-margin: 1rem;
 
     VerticalBox {
         width: 100%;
-        vertical-stretch: 1;
+        height: 100%;
         spacing: 20px;
-        
+        padding-top: 12px;
+        padding-bottom: 12px;
+        padding-left: 20px;
+        padding-right: 20px;
+
         // --- Nav Bar ---
         HorizontalBox {
             alignment: start;
@@ -36,9 +48,15 @@ export component SpotifySearch {
                     source: @image-url("../../assets/BackBtn.svg");
                     width: 18px; height: 18px; colorize: #ffffffcc;
                 }
-                touch-back := TouchArea { clicked => { root.go-back() } mouse-cursor: pointer; }
+                touch-back := TouchArea {
+                    clicked => {
+                        root.keyboard-visible = false;
+                        root.go-back();
+                    }
+                    mouse-cursor: pointer;
+                }
             }
-            
+
             Rectangle { width: 15px; }
 
             Text {
@@ -56,28 +74,45 @@ export component SpotifySearch {
             height: 48px;
 
             Rectangle {
-                horizontal-stretch: 1; 
-                border-radius: 24px; 
-                background: #ffffff1a; 
+                horizontal-stretch: 1;
+                border-radius: 24px;
+                background: #ffffff1a;
                 border-width: 1px;
-                border-color: focus-scope.has-focus ? #1DB954 : #ffffff33; 
+                border-color: root.keyboard-visible ? #1DB954 : #ffffff33;
+                clip: true;
 
-                if search_input.text == "" : Text {
-                    x: 20px; text: "What do you want to listen to?"; color: #ffffff66; font-size: 16px; vertical-alignment: center; height: parent.height; font-weight: 600;
+                if root.search-query == "" : Text {
+                    x: 20px; text: "What do you want to listen to?";
+                    color: #ffffff66; font-size: 16px;
+                    vertical-alignment: center; height: parent.height; font-weight: 600;
                 }
 
-                focus-scope := FocusScope {
-                    width: 100%;
-                    height: 100%;
-                    search_input := TextInput {
-                        x: 20px; 
-                        width: parent.width - 40px; 
-                        height: parent.height; 
-                        vertical-alignment: center; 
-                        font-size: 16px; 
-                        color: white; 
-                        single-line: true;
-                        accepted => { root.search-music(self.text) } 
+                search_input := TextInput {
+                    x: 20px;
+                    width: max(parent.width - 40px, self.preferred-width);
+                    height: parent.height;
+                    vertical-alignment: center;
+                    font-size: 16px;
+                    color: white;
+                    single-line: true;
+                    text <=> root.search-query;
+                    accepted => {
+                        root.keyboard-visible = false;
+                        root.search-music(root.search-query);
+                    }
+                    // Show keyboard when TextInput gains focus natively (on click)
+                    changed has-focus => {
+                        if (self.has-focus) {
+                            root.keyboard-visible = true;
+                        }
+                    }
+                    cursor-position-changed(cursorPos) => {
+                        // Handle text scrolling so cursor stays visible
+                        if cursorPos.x + self.x < root.text-input-margin {
+                            self.x = - cursorPos.x + root.text-input-margin;
+                        } else if cursorPos.x + self.x > parent.width - root.text-input-margin - self.text-cursor-width {
+                            self.x = parent.width - cursorPos.x - root.text-input-margin - self.text-cursor-width;
+                        }
                     }
                 }
             }
@@ -112,7 +147,6 @@ export component SpotifySearch {
                                     if  touch.has-hover : Image { source: @image-url("../../assets/PlayBtn.svg"); width: 16px; height: 16px; colorize: white; }
                                 }
 
-                                // Album art thumbnail
                                 Rectangle {
                                     width: 44px; height: 44px; border-radius: 4px; clip: true; background: #282828;
                                     Image { width: 100%; height: 100%; source: track.album-art; image-fit: cover; }
@@ -131,14 +165,20 @@ export component SpotifySearch {
                             }
                         }
 
-                        touch := TouchArea { clicked => { root.play-track(track.id) } mouse-cursor: pointer; }
+                        touch := TouchArea {
+                            clicked => {
+                                root.keyboard-visible = false;
+                                root.play-track(track.id);
+                            }
+                            mouse-cursor: pointer;
+                        }
                     }
                 }
 
                 if root.has-more : HorizontalLayout {
-                    alignment: center; padding-top: 20px; padding-bottom: 20px; 
+                    alignment: center; padding-top: 20px; padding-bottom: 20px;
                     Rectangle {
-                        width: 140px; height: 36px; border-radius: 18px; 
+                        width: 140px; height: 36px; border-radius: 18px;
                         background: touch-more.pressed ? #ffffff22 : (touch-more.has-hover ? #ffffff1a : transparent);
                         border-width: 1px; border-color: touch-more.has-hover ? #ffffff66 : #ffffff33;
 
@@ -147,6 +187,38 @@ export component SpotifySearch {
                     }
                 }
             }
+        }
+    }
+
+    // --- Scrim: tap outside keyboard to dismiss ---
+    if root.keyboard-visible : Rectangle {
+        x: 0; y: 0; width: 100%; height: root.height - root.keyboard-height;
+        background: transparent;
+        TouchArea { clicked => { root.keyboard-visible = false; } }
+    }
+
+    // --- Sliding Keyboard Overlay ---
+    keyboard := VirtualKeyboard {
+        x: 0;
+        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
+        width: root.width;
+        height: root.keyboard-height;
+        text <=> root.search-query;
+        enter-label: "Search";
+
+        accepted => {
+            root.keyboard-visible = false;
+            root.search-music(root.search-query);
+        }
+
+        // Sync virtual keyboard cursor-pos to TextInput's native cursor
+        changed cursor-pos => {
+            search_input.set-selection-offsets(self.cursor-pos, self.cursor-pos);
+        }
+
+        animate y {
+            duration: 300ms;
+            easing: ease-out;
         }
     }
 }

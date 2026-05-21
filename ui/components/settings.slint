@@ -1,0 +1,474 @@
+import { ScrollView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { VirtualKeyboard } from "keyboard/keyboard.slint";
+
+export struct UIWifiNetwork {
+    ssid: string,
+    signal: string,
+}
+
+export struct UIBluetoothDevice {
+    name: string,
+    mac: string,
+    connected: bool,
+}
+
+export component Settings inherits Rectangle {
+    in property <[UIWifiNetwork]> wifi-networks: [];
+    in property <[UIBluetoothDevice]> bluetooth-devices: [];
+    in property <bool> wifi-scanning: false;
+    in property <bool> bluetooth-scanning: false;
+    in property <string> current-device-name: "r-audio";
+    in property <string> status-message: "";
+
+    in-out property <string> device-name: "";
+    in-out property <string> wifi-password: "";
+    in-out property <string> selected-ssid: "";
+
+    callback go-back();
+    callback scan-wifi();
+    callback connect-wifi(string, string);
+    callback update-device-name(string);
+    callback scan-bluetooth();
+    callback connect-bluetooth(string);
+    callback backspace-pressed(string) -> string;
+
+    property <string> active-tab: "wifi";
+    property <string> active-input: "wifi-password";
+
+    // Keyboard slide state
+    property <bool> keyboard-visible: false;
+    property <length> keyboard-height: 310px;
+
+    // Keyboard text — single source of truth
+    property <string> keyboard-text: "";
+
+    init => {
+        root.device-name = root.current-device-name;
+        root.keyboard-text = root.wifi-password;
+    }
+
+    changed keyboard-text => {
+        if (root.active-input == "device-name") {
+            root.device-name = root.keyboard-text;
+        } else {
+            root.wifi-password = root.keyboard-text;
+        }
+    }
+
+    // Dismiss keyboard when switching to Bluetooth tab
+    changed active-tab => {
+        if (root.active-tab == "bluetooth") {
+            root.keyboard-visible = false;
+        }
+    }
+
+    VerticalBox {
+        width: 100%;
+        height: 100%;
+        spacing: 16px;
+        padding: 20px;
+
+        // --- Nav Header ---
+        HorizontalLayout {
+            alignment: space-between;
+            height: 36px;
+
+            HorizontalLayout {
+                spacing: 15px;
+                alignment: start;
+
+                Rectangle {
+                    width: 36px; height: 36px; border-radius: 18px;
+                    background: touch-back.pressed ? #ffffff22 : (touch-back.has-hover ? #ffffff11 : transparent);
+                    Image {
+                        source: @image-url("../assets/BackBtn.svg");
+                        width: 18px; height: 18px; colorize: #ffffffcc;
+                    }
+                    touch-back := TouchArea {
+                        clicked => {
+                            root.keyboard-visible = false;
+                            root.go-back();
+                        }
+                        mouse-cursor: pointer;
+                    }
+                }
+
+                Text {
+                    text: "Settings";
+                    color: white;
+                    font-size: 24px;
+                    vertical-alignment: center;
+                    font-weight: 800;
+                }
+            }
+
+            if root.status-message != "" : Text {
+                text: root.status-message;
+                color: #1DB954;
+                font-size: 14px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+
+        // --- Tab Switcher ---
+        HorizontalLayout {
+            height: 44px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 12px;
+                background: #00000040;
+                border-width: 1px;
+                border-color: #ffffff10;
+
+                HorizontalLayout {
+                    padding: 4px;
+                    spacing: 4px;
+
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 8px;
+                        background: root.active-tab == "wifi" ? #ffffff1c : transparent;
+                        Text {
+                            text: "Wi-Fi";
+                            color: root.active-tab == "wifi" ? white : #ffffff80;
+                            font-size: 14px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.active-tab = "wifi";
+                                root.active-input = "wifi-password";
+                                root.keyboard-text = root.wifi-password;
+                                root.keyboard-visible = false;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 8px;
+                        background: root.active-tab == "device" ? #ffffff1c : transparent;
+                        Text {
+                            text: "Device Name";
+                            color: root.active-tab == "device" ? white : #ffffff80;
+                            font-size: 14px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.active-tab = "device";
+                                root.active-input = "device-name";
+                                root.keyboard-text = root.device-name;
+                                root.keyboard-visible = false;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 8px;
+                        background: root.active-tab == "bluetooth" ? #ffffff1c : transparent;
+                        Text {
+                            text: "Bluetooth";
+                            color: root.active-tab == "bluetooth" ? white : #ffffff80;
+                            font-size: 14px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.active-tab = "bluetooth"; } }
+                    }
+                }
+            }
+        }
+
+        // --- Content Panel ---
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 16px;
+            background: #ffffff0a;
+            border-width: 1px;
+            border-color: #ffffff10;
+            clip: true;
+
+            // 1. Wi-Fi Tab
+            if root.active-tab == "wifi" : VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "Select a Network"; color: white; font-size: 16px; font-weight: 700; }
+                    if root.wifi-scanning : Text { text: "Scanning…"; color: #1DB954; font-size: 13px; }
+                    if !root.wifi-scanning : Rectangle {
+                        width: 70px; height: 24px; border-radius: 12px; background: #ffffff15;
+                        Text { text: "Refresh"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.scan-wifi(); } }
+                    }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 80px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+                        for net in root.wifi-networks : Rectangle {
+                            height: 44px;
+                            border-radius: 8px;
+                            background: root.selected-ssid == net.ssid ? #ffffff1c : (touch-net.has-hover ? #ffffff0c : transparent);
+                            border-width: 1px;
+                            border-color: root.selected-ssid == net.ssid ? #ffffff33 : transparent;
+
+                            HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px;
+                                alignment: space-between;
+                                Text { text: net.ssid; color: white; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+                                Text { text: net.signal + "% signal"; color: #ffffff80; font-size: 12px; vertical-alignment: center; }
+                            }
+                            touch-net := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.selected-ssid = net.ssid;
+                                    root.active-input = "wifi-password";
+                                    root.keyboard-text = root.wifi-password;
+                                    root.keyboard-visible = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.selected-ssid != "" : HorizontalLayout {
+                    spacing: 12px;
+                    height: 44px;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        border-radius: 8px;
+                        background: #00000040;
+                        border-width: 1px;
+                        border-color: root.keyboard-visible && root.active-input == "wifi-password" ? #1DB954 : #ffffff20;
+
+                        if root.wifi-password == "" : Text {
+                            x: 12px; text: "Password for " + root.selected-ssid;
+                            color: #ffffff50; font-size: 14px; vertical-alignment: center; height: 100%;
+                        }
+
+                        wifi-focus := FocusScope {
+                            forward-focus: wifi-input;
+                            x: 12px; width: parent.width - 24px; height: 100%;
+                            wifi-input := TextInput {
+                                width: 100%; height: 100%;
+                                font-size: 14px; color: white;
+                                vertical-alignment: center;
+                                text <=> root.wifi-password;
+                                single-line: true;
+                                accepted => {
+                                    root.keyboard-visible = false;
+                                    root.connect-wifi(root.selected-ssid, root.wifi-password);
+                                }
+                            }
+                        }
+                        TouchArea {
+                            clicked => {
+                                wifi-focus.focus();
+                                root.active-input = "wifi-password";
+                                root.keyboard-text = root.wifi-password;
+                                root.keyboard-visible = true;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 100px; border-radius: 8px; background: #1DB954;
+                        Text { text: "CONNECT"; color: white; font-size: 13px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.keyboard-visible = false;
+                                root.connect-wifi(root.selected-ssid, root.wifi-password);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Device Name Tab
+            if root.active-tab == "device" : VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+                alignment: center;
+
+                Text {
+                    text: "Device Hostname";
+                    color: white; font-size: 18px; font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Change this kiosk's name on the network.\nAccessible at http://[name].local";
+                    color: #ffffff80; font-size: 13px;
+                    horizontal-alignment: center;
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 320px; height: 48px; border-radius: 8px;
+                        background: #00000040;
+                        border-width: 1px;
+                        border-color: root.keyboard-visible && root.active-input == "device-name" ? #1DB954 : #ffffff20;
+
+                        if root.device-name == "" : Text {
+                            x: 16px; text: "Enter device hostname";
+                            color: #ffffff50; font-size: 14px; vertical-alignment: center; height: 100%;
+                        }
+
+                        device-focus := FocusScope {
+                            forward-focus: device-input;
+                            x: 16px; width: parent.width - 32px; height: 100%;
+                            device-input := TextInput {
+                                width: 100%; height: 100%;
+                                font-size: 16px; color: white;
+                                vertical-alignment: center;
+                                text <=> root.device-name;
+                                single-line: true;
+                                accepted => {
+                                    root.keyboard-visible = false;
+                                    root.update-device-name(root.device-name);
+                                }
+                            }
+                        }
+                        TouchArea {
+                            clicked => {
+                                device-focus.focus();
+                                root.active-input = "device-name";
+                                root.keyboard-text = root.device-name;
+                                root.keyboard-visible = true;
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 180px; height: 44px; border-radius: 22px; background: #1DB954;
+                        Text { text: "APPLY NAME"; color: white; font-size: 14px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.keyboard-visible = false;
+                                root.update-device-name(root.device-name);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Bluetooth Tab
+            if root.active-tab == "bluetooth" : VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "Bluetooth Audio Outputs"; color: white; font-size: 16px; font-weight: 700; }
+                    if root.bluetooth-scanning : Text { text: "Scanning…"; color: #1DB954; font-size: 13px; }
+                    if !root.bluetooth-scanning : Rectangle {
+                        width: 70px; height: 24px; border-radius: 12px; background: #ffffff15;
+                        Text { text: "Scan"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.scan-bluetooth(); } }
+                    }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 120px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        for dev in root.bluetooth-devices : Rectangle {
+                            height: 50px;
+                            border-radius: 8px;
+                            background: dev.connected ? #1db95420 : (touch-dev.has-hover ? #ffffff0c : transparent);
+                            border-width: 1px;
+                            border-color: dev.connected ? #1DB95440 : transparent;
+
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px;
+                                alignment: space-between;
+
+                                VerticalLayout {
+                                    alignment: center; spacing: 2px;
+                                    Text { text: dev.name; color: white; font-size: 14px; font-weight: 600; }
+                                    Text { text: dev.mac; color: #ffffff60; font-size: 11px; }
+                                }
+
+                                Rectangle {
+                                    width: 90px; height: 26px; border-radius: 13px;
+                                    background: dev.connected ? #e63946 : #ffffff15;
+                                    y: 12px;
+                                    Text {
+                                        text: dev.connected ? "Disconnect" : "Connect";
+                                        color: white; font-size: 11px; font-weight: 700;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            touch-dev := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.connect-bluetooth(dev.mac); }
+                            }
+                        }
+
+                        if root.bluetooth-devices.length == 0 && !root.bluetooth-scanning : VerticalLayout {
+                            padding-top: 30px;
+                            Text {
+                                text: "No devices found. Click Scan to search.";
+                                color: #ffffff60; font-size: 13px; horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Scrim: tap outside to dismiss keyboard ---
+    if root.keyboard-visible : Rectangle {
+        x: 0; y: 0;
+        width: root.width;
+        height: root.height - root.keyboard-height;
+        background: #00000030;
+        TouchArea { clicked => { root.keyboard-visible = false; } }
+    }
+
+    // --- Sliding Keyboard Overlay ---
+    keyboard := VirtualKeyboard {
+        x: 0;
+        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
+        width: root.width;
+        height: root.keyboard-height;
+        text: root.keyboard-text;
+        enter-label: root.active-tab == "wifi" ? "Connect" : "Apply";
+
+        accepted => {
+            root.keyboard-visible = false;
+            if (root.active-input == "device-name") {
+                root.update-device-name(root.device-name);
+            } else {
+                root.connect-wifi(root.selected-ssid, root.wifi-password);
+            }
+        }
+
+        changed text => {
+            root.keyboard-text = self.text;
+        }
+
+        animate y {
+            duration: 300ms;
+            easing: ease-out;
+        }
+    }
+}

@@ -562,41 +562,72 @@ fn spawn_dashboard_loader(
 }
 
 fn spawn_fft_loop(
-    sample_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
+    sample_buffer: Arc<std::sync::Mutex<std::collections::VecDeque<f32>>>,
     is_playing_atom: Arc<std::sync::atomic::AtomicBool>,
 ) {
     std::thread::spawn(move || {
         let mut analyzer = spectrum_analyzer::SpectrumAnalyzer::new();
+        // Reused scratch buffer for the snapshot we hand to the analyzer.
+        // Sized to the capture buffer max so it never reallocates.
+        let mut snapshot: Vec<f32> = Vec::with_capacity(spectrum_analyzer::CAPTURE_BUFFER_LEN);
+        // Track the last bands we pushed to Slint so we can skip identical frames.
+        let mut last_sent: Vec<f32> = vec![0.0f32; spectrum_analyzer::NUM_BANDS];
+        // Whether we already sent the all-zeros frame on pause entry.
+        let mut sent_pause_zeros = false;
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(16));
-
             if !is_playing_atom.load(std::sync::atomic::Ordering::Relaxed) {
-                analyzer.reset();
-                let zeros = vec![0.0f32; spectrum_analyzer::NUM_BANDS];
-                let _ = slint::invoke_from_event_loop(move || {
-                    SPECTRUM_BANDS_MODEL.with(|m| {
-                        if let Some(ref model) = *m.borrow() {
-                            model.set_vec(zeros);
-                        }
+                if !sent_pause_zeros {
+                    // Send zeros once on pause entry, then go idle.
+                    analyzer.reset();
+                    last_sent.fill(0.0);
+                    let zeros = vec![0.0f32; spectrum_analyzer::NUM_BANDS];
+                    let _ = slint::invoke_from_event_loop(move || {
+                        SPECTRUM_BANDS_MODEL.with(|m| {
+                            if let Some(ref model) = *m.borrow() {
+                                model.set_vec(zeros);
+                            }
+                        });
                     });
-                });
+                    sent_pause_zeros = true;
+                }
+                // Sleep much longer while paused — no audio to process.
+                std::thread::sleep(std::time::Duration::from_millis(200));
                 continue;
             }
+            // Music is playing: resume normal 30 Hz cadence.
+            sent_pause_zeros = false;
+            std::thread::sleep(std::time::Duration::from_millis(33));
 
-            let samples = {
+            snapshot.clear();
+            {
                 let Ok(buf) = sample_buffer.lock() else { continue };
-                buf.clone()
-            };
+                snapshot.extend(buf.iter().copied());
+            }
 
-            if samples.len() < spectrum_analyzer::FFT_SIZE * 2 {
+            if snapshot.len() < spectrum_analyzer::FFT_SIZE * 2 {
                 continue;
             }
 
-            let bands = analyzer.process(&samples);
+            let new_bands = analyzer.process(&snapshot);
+
+            // Skip the Slint set_vec + re-render when bands haven't changed
+            // meaningfully (e.g. near-silent passages).
+            const EPSILON: f32 = 0.005;
+            let changed = new_bands
+                .iter()
+                .zip(last_sent.iter())
+                .any(|(a, b)| (a - b).abs() > EPSILON);
+
+            if !changed {
+                continue;
+            }
+
+            let bands_vec: Vec<f32> = new_bands.to_vec();
+            last_sent.clone_from(&bands_vec);
             let _ = slint::invoke_from_event_loop(move || {
                 SPECTRUM_BANDS_MODEL.with(|m| {
                     if let Some(ref model) = *m.borrow() {
-                        model.set_vec(bands);
+                        model.set_vec(bands_vec);
                     }
                 });
             });
@@ -633,8 +664,308 @@ async fn main() -> Result<(), slint::PlatformError> {
             }
         }
     });
-    
+
+    ui.on_backspace_pressed(|s| {
+        let mut string = s.to_string();
+        string.pop();
+        string.into()
+    });
+
+    ui.on_char_count(|text| {
+        text.to_string().chars().count() as i32
+    });
+
+    ui.on_get_before_cursor(|text, pos| {
+        let text_str = text.to_string();
+        let chars: Vec<char> = text_str.chars().collect();
+        let pos = (pos.max(0) as usize).min(chars.len());
+        chars[..pos].iter().collect::<String>().into()
+    });
+
+    ui.on_get_after_cursor(|text, pos| {
+        let text_str = text.to_string();
+        let chars: Vec<char> = text_str.chars().collect();
+        let pos = (pos.max(0) as usize).min(chars.len());
+        chars[pos..].iter().collect::<String>().into()
+    });
+
+    // --- SETTINGS CALLBACKS ---
+
+    // Wi-Fi: Scan
+    let ui_handle_settings = ui_handle.clone();
+    ui.on_settings_scan_wifi({
+        let ui_handle = ui_handle_settings.clone();
+        move || {
+            let ui_handle = ui_handle.clone();
+            tokio::spawn(async move {
+                // Set scanning indicator
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || { if let Some(u) = h.upgrade() { u.set_settings_wifi_scanning(true); } }
+                });
+
+                let networks = if cfg!(target_os = "linux") {
+                    let out = std::process::Command::new("nmcli")
+                        .args(&["-t", "-f", "SSID,SIGNAL", "device", "wifi", "list"])
+                        .output()
+                        .unwrap_or_else(|_| std::process::Output {
+                            status: std::process::ExitStatus::default(),
+                            stdout: vec![],
+                            stderr: vec![],
+                        });
+                    let text = String::from_utf8_lossy(&out.stdout).to_string();
+                    let mut nets: Vec<UIWifiNetwork> = vec![];
+                    for line in text.lines() {
+                        let parts: Vec<&str> = line.splitn(2, ':').collect();
+                        if parts.len() >= 2 {
+                            let ssid = parts[0].trim().to_string();
+                            let signal = parts[1].trim().to_string();
+                            if !ssid.is_empty() && !nets.iter().any(|n: &UIWifiNetwork| n.ssid == ssid.as_str()) {
+                                nets.push(UIWifiNetwork { ssid: ssid.into(), signal: signal.into() });
+                            }
+                        }
+                    }
+                    nets
+                } else {
+                    // Simulated networks on non-Linux
+                    vec![
+                        UIWifiNetwork { ssid: "Home-WiFi-5G".into(), signal: "95".into() },
+                        UIWifiNetwork { ssid: "CoffeeShop_Guest".into(), signal: "72".into() },
+                        UIWifiNetwork { ssid: "Kiosk_Internal".into(), signal: "60".into() },
+                    ]
+                };
+
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || {
+                        if let Some(u) = h.upgrade() {
+                            let model = std::rc::Rc::new(slint::VecModel::from(networks));
+                            u.set_settings_wifi_networks(model.into());
+                            u.set_settings_wifi_scanning(false);
+                        }
+                    }
+                });
+            });
+        }
+    });
+
+    // Wi-Fi: Connect
+    let ui_handle_wifi = ui_handle.clone();
+    ui.on_settings_connect_wifi({
+        let ui_handle = ui_handle_wifi.clone();
+        move |ssid, password| {
+            let ui_handle = ui_handle.clone();
+            let ssid = ssid.to_string();
+            let password = password.to_string();
+            tokio::spawn(async move {
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    let s = ssid.clone();
+                    move || {
+                        if let Some(u) = h.upgrade() {
+                            u.set_settings_status_message(format!("Connecting to {}…", s).into());
+                        }
+                    }
+                });
+
+                let result = if cfg!(target_os = "linux") {
+                    let mut args = vec!["nmcli", "device", "wifi", "connect", &ssid];
+                    if !password.is_empty() { args.extend_from_slice(&["password", &password]); }
+                    std::process::Command::new("nmcli")
+                        .args(&args)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
+                } else {
+                    println!("[settings] Simulating Wi-Fi connect to '{}' with password '{}'", ssid, password);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    true
+                };
+
+                let msg = if result {
+                    format!("Connected to {}", ssid)
+                } else {
+                    format!("Failed to connect to {}", ssid)
+                };
+
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || {
+                        if let Some(u) = h.upgrade() {
+                            u.set_settings_status_message(msg.into());
+                        }
+                    }
+                });
+            });
+        }
+    });
+
+    // Device Name: Update hostname
+    let ui_handle_hostname = ui_handle.clone();
+    ui.on_settings_update_device_name({
+        let ui_handle = ui_handle_hostname.clone();
+        move |name| {
+            let ui_handle = ui_handle.clone();
+            let name = name.to_string();
+            tokio::spawn(async move {
+                let result = if cfg!(target_os = "linux") {
+                    let ok = std::process::Command::new("hostnamectl")
+                        .args(&["set-hostname", &name])
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    // Also update /etc/hosts so local resolution works
+                    if ok {
+                        let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
+                        let updated = hosts.lines()
+                            .map(|l| if l.starts_with("127.0.1.1") { format!("127.0.1.1\t{}", name) } else { l.to_string() })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = std::fs::write("/etc/hosts", updated);
+                    }
+                    ok
+                } else {
+                    println!("[settings] Simulating hostname change to '{}'", name);
+                    true
+                };
+
+                let msg = if result {
+                    format!("Device name set to \"{}\"", name)
+                } else {
+                    "Failed to update hostname".to_string()
+                };
+
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    let name_copy = name.clone();
+                    move || {
+                        if let Some(u) = h.upgrade() {
+                            u.set_settings_status_message(msg.into());
+                            u.set_settings_current_device_name(name_copy.into());
+                        }
+                    }
+                });
+            });
+        }
+    });
+
+    // Bluetooth: Scan
+    let ui_handle_bt_scan = ui_handle.clone();
+    ui.on_settings_scan_bluetooth({
+        let ui_handle = ui_handle_bt_scan.clone();
+        move || {
+            let ui_handle = ui_handle.clone();
+            tokio::spawn(async move {
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || { if let Some(u) = h.upgrade() { u.set_settings_bluetooth_scanning(true); } }
+                });
+
+                // Run bluetoothctl scan briefly then list
+                if cfg!(target_os = "linux") {
+                    let _ = std::process::Command::new("bluetoothctl").args(&["scan", "on"]).spawn();
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    let _ = std::process::Command::new("bluetoothctl").args(&["scan", "off"]).spawn();
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+
+                let devices = if cfg!(target_os = "linux") {
+                    let out = std::process::Command::new("bluetoothctl")
+                        .args(&["devices"])
+                        .output()
+                        .unwrap_or_else(|_| std::process::Output {
+                            status: std::process::ExitStatus::default(),
+                            stdout: vec![],
+                            stderr: vec![],
+                        });
+                    let text = String::from_utf8_lossy(&out.stdout).to_string();
+                    text.lines()
+                        .filter_map(|l| {
+                            // Format: "Device AA:BB:CC:DD:EE:FF Device Name"
+                            let parts: Vec<&str> = l.splitn(3, ' ').collect();
+                            if parts.len() == 3 && parts[0] == "Device" {
+                                Some(UIBluetoothDevice {
+                                    mac: parts[1].into(),
+                                    name: parts[2].into(),
+                                    connected: false,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![
+                        UIBluetoothDevice { name: "JBL Flip 6".into(), mac: "AA:BB:CC:DD:EE:01".into(), connected: false },
+                        UIBluetoothDevice { name: "Sony WH-1000XM5".into(), mac: "AA:BB:CC:DD:EE:02".into(), connected: true },
+                    ]
+                };
+
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || {
+                        if let Some(u) = h.upgrade() {
+                            let model = std::rc::Rc::new(slint::VecModel::from(devices));
+                            u.set_settings_bluetooth_devices(model.into());
+                            u.set_settings_bluetooth_scanning(false);
+                        }
+                    }
+                });
+            });
+        }
+    });
+
+    // Bluetooth: Connect / Disconnect toggle
+    let ui_handle_bt_connect = ui_handle.clone();
+    ui.on_settings_connect_bluetooth({
+        let ui_handle = ui_handle_bt_connect.clone();
+        move |mac| {
+            let ui_handle = ui_handle.clone();
+            let mac = mac.to_string();
+            tokio::spawn(async move {
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    let m = mac.clone();
+                    move || {
+                        if let Some(u) = h.upgrade() {
+                            u.set_settings_status_message(format!("Connecting to {}…", m).into());
+                        }
+                    }
+                });
+
+                let result = if cfg!(target_os = "linux") {
+                    std::process::Command::new("bluetoothctl")
+                        .args(&["connect", &mac])
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
+                } else {
+                    println!("[settings] Simulating Bluetooth connect to '{}'", mac);
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    true
+                };
+
+                let msg = if result {
+                    format!("Bluetooth connected: {}", mac)
+                } else {
+                    format!("Failed to connect: {}", mac)
+                };
+
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || {
+                        if let Some(u) = h.upgrade() {
+                            u.set_settings_status_message(msg.into());
+                        }
+                    }
+                });
+            });
+        }
+    });
+
     let master_tracks = Arc::new(Mutex::new(Vec::<TrackItem>::new()));
+
 
     // --- PLAYBACK QUEUE STATE ---
     #[derive(Default)]
@@ -920,27 +1251,73 @@ async fn main() -> Result<(), slint::PlatformError> {
                     }
                 });
                 
-                for (index, track) in tracks.into_iter().enumerate() {
-                    let ui_handle_image = ui_handle_clone.clone();
-                    let t_id = track.id.clone();
-                    let track_album_url = track.album_url.clone();
-                    
-                    tokio::spawn(async move {
-                        let image_buffer = utils::fetch_and_cache_image(&t_id, &track_album_url).await;
-                        
-                        if let Some(buf) = image_buffer {
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(ui) = ui_handle_image.upgrade() {
-                                    let tracks_model = ui.get_spotify_album_tracks();
-                                    if let Some(mut ui_track) = tracks_model.row_data(index) {
-                                        ui_track.album_art = slint::Image::from_rgba8(buf);
-                                        tracks_model.set_row_data(index, ui_track);
+                // Batch album-art updates: workers send (index, buf) to a channel;
+                // a single coalescing task flushes every 50ms in one event-loop hop.
+                let (img_tx, mut img_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<(usize, slint::SharedPixelBuffer<slint::Rgba8Pixel>)>();
+                let ui_handle_flusher = ui_handle_clone.clone();
+                tokio::spawn(async move {
+                    let mut pending: Vec<(usize, slint::SharedPixelBuffer<slint::Rgba8Pixel>)> = Vec::new();
+                    let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(50));
+                    tick.tick().await; // consume immediate tick
+                    loop {
+                        tokio::select! {
+                            msg = img_rx.recv() => {
+                                match msg {
+                                    Some(item) => pending.push(item),
+                                    None => {
+                                        // All senders dropped — final flush and exit.
+                                        if !pending.is_empty() {
+                                            let batch = std::mem::take(&mut pending);
+                                            let ui_h = ui_handle_flusher.clone();
+                                            let _ = slint::invoke_from_event_loop(move || {
+                                                if let Some(ui) = ui_h.upgrade() {
+                                                    let tracks_model = ui.get_spotify_album_tracks();
+                                                    for (idx, buf) in batch {
+                                                        if let Some(mut t) = tracks_model.row_data(idx) {
+                                                            t.album_art = slint::Image::from_rgba8(buf);
+                                                            tracks_model.set_row_data(idx, t);
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        break;
                                     }
                                 }
-                            });
+                            }
+                            _ = tick.tick() => {
+                                if !pending.is_empty() {
+                                    let batch = std::mem::take(&mut pending);
+                                    let ui_h = ui_handle_flusher.clone();
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = ui_h.upgrade() {
+                                            let tracks_model = ui.get_spotify_album_tracks();
+                                            for (idx, buf) in batch {
+                                                if let Some(mut t) = tracks_model.row_data(idx) {
+                                                    t.album_art = slint::Image::from_rgba8(buf);
+                                                    tracks_model.set_row_data(idx, t);
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                });
+
+                for (index, track) in tracks.into_iter().enumerate() {
+                    let t_id = track.id.clone();
+                    let track_album_url = track.album_url.clone();
+                    let tx = img_tx.clone();
+                    tokio::spawn(async move {
+                        if let Some(buf) = utils::fetch_and_cache_image(&t_id, &track_album_url).await {
+                            let _ = tx.send((index, buf));
                         }
                     });
                 }
+                drop(img_tx); // Last sender goes when all workers drop their clones.
 
             } else {
                 println!("ERROR: Failed to fetch playlist from Spotify API!");
@@ -1294,13 +1671,22 @@ async fn main() -> Result<(), slint::PlatformError> {
 
                         tokio::spawn(async move {
                             if let Some(buf) = utils::fetch_and_cache_image(&t_id, &t_url).await {
-                                // Extract dominant colour then build gradient image before buf is moved
-                                let (h, s, v) = utils::extract_dominant_hsv(&buf);
-                                let gradient = utils::build_album_gradient_image(h, s, v);
+                                // Offload CPU-bound colour analysis + gradient build off the tokio runtime.
+                                // Move `buf` into the blocking task; clone the SharedPixelBuffer
+                                // (Arc-only, O(1)) for the UI closure so no pixel data is copied.
+                                let buf_for_ui = buf.clone();
+                                let gradient = tokio::task::spawn_blocking(move || {
+                                    let (h, s, v) = utils::extract_dominant_hsv(&buf);
+                                    utils::build_album_gradient_image(h, s, v)
+                                })
+                                .await
+                                .ok();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(ui) = ui_img.upgrade() {
-                                        ui.set_player_album_cover(slint::Image::from_rgba8(buf));
-                                        ui.set_player_bg_image(slint::Image::from_rgba8(gradient));
+                                        ui.set_player_album_cover(slint::Image::from_rgba8(buf_for_ui));
+                                        if let Some(gradient) = gradient {
+                                            ui.set_player_bg_image(slint::Image::from_rgba8(gradient));
+                                        }
                                     }
                                 });
                             }

@@ -10,6 +10,6 @@ xset -dpms
 # Start the openbox window manager in the background to handle full-screen window sizing
 openbox-session &
 
-# Execute the R-Audio player. 
-# Using "exec" makes it replace the shell process, ensuring X11 shuts down if the app exits.
-exec /usr/local/bin/r-audio
+# Execute the R-Audio launcher. 
+# Using "exec" makes it replace the shell process, ensuring X11 shuts down if the launcher exits.
+exec /usr/local/bin/r-audio-launcher

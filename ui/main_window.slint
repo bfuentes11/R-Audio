@@ -14,8 +14,14 @@ import {
     UIAccount,
 } from "components/spotify/spotify_accounts.slint";
 import { FullPlayer } from "components/full_player.slint";
+import { SetupWindow } from "setup_window.slint";
+import {
+    Settings,
+    UIWifiNetwork,
+    UIBluetoothDevice,
+} from "components/settings.slint";
 
-export { UITrack, UIAccount }
+export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice }
 
 export component MainWindow inherits Window {
     preferred-width: 800px;
@@ -63,6 +69,7 @@ export component MainWindow inherits Window {
     callback spotify-switch-account();
 
     callback search-music(string);
+    callback backspace-pressed(string) -> string;
     callback play-track(string);
     callback load-more();
     callback open-album(string);
@@ -70,6 +77,22 @@ export component MainWindow inherits Window {
     callback open-artist(string);
     callback open-spotify-provider();
     callback open-album-by-id(string);  // opens an album directly by album ID
+    callback get-before-cursor(string, int) -> string;
+    callback get-after-cursor(string, int) -> string;
+    callback char-count(string) -> int;
+
+    // Settings properties & callbacks
+    in property <[UIWifiNetwork]> settings-wifi-networks: [];
+    in property <[UIBluetoothDevice]> settings-bluetooth-devices: [];
+    in property <bool> settings-wifi-scanning: false;
+    in property <bool> settings-bluetooth-scanning: false;
+    in property <string> settings-current-device-name: "r-audio";
+    in property <string> settings-status-message: "";
+    callback settings-scan-wifi();
+    callback settings-connect-wifi(string, string);
+    callback settings-update-device-name(string);
+    callback settings-scan-bluetooth();
+    callback settings-connect-bluetooth(string);
 
     // Player Bar Properties
     in property <bool> player-is-playing: false;
@@ -221,138 +244,193 @@ export component MainWindow inherits Window {
         // =========================================================
         // --- HOME / LANDING PAGE ---
         // =========================================================
-        if active-view == "home": VerticalBox {
+        if active-view == "home": Rectangle {
             width: 100%;
             vertical-stretch: 1;
-            spacing: 0px;
-            padding: 0px;
 
-            // Centering spacers
-            Rectangle {
-                vertical-stretch: 1;
-            }
+            // Home content
+            VerticalBox {
+                width: 100%;
+                height: 100%;
+                spacing: 0px;
+                padding: 0px;
 
-            // App title
-            Text {
-                text: "R·Audio";
-                color: white;
-                font-size: 48px;
-                font-weight: 800;
-                horizontal-alignment: center;
-            }
-
-            // Tagline
-            Text {
-                text: "YOUR MUSIC. ONE PLACE.";
-                color: #ffffff55;
-                font-size: 11px;
-                font-weight: 600;
-                letter-spacing: 4px;
-                horizontal-alignment: center;
-            }
-
-            // Spacer
-            Rectangle {
-                height: 20px;
-            }
-
-            // Thin divider line
-            Rectangle {
-                height: 1px;
-                background: #ffffff18;
-                horizontal-stretch: 1;
-            }
-
-            Rectangle {
-                height: 16px;
-            }
-
-            // Section label
-            Text {
-                text: "SELECT A PROVIDER";
-                color: #ffffff40;
-                font-size: 10px;
-                font-weight: 700;
-                letter-spacing: 3px;
-                horizontal-alignment: center;
-            }
-
-            Rectangle {
-                height: 16px;
-            }
-
-            // Provider cards row
-            HorizontalLayout {
-                alignment: center;
-                spacing: 28px;
-
-                ProviderCard {
-                    title: "Spotify";
-                    has-logo: true;
-                    logo-source: @image-url("assets/spotify.svg");
-                    clicked => {
-                        root.open-spotify-provider();
-                    }
+                // Centering spacers
+                Rectangle {
+                    vertical-stretch: 1;
                 }
 
-                ProviderCard {
-                    title: "Tidal";
-                    has-logo: true;
-                    logo-source: @image-url("assets/Tidal.png");
-                    brand-color: #000000;
-                    clicked => {
-                    }
+                // App title
+                Text {
+                    text: "R·Audio";
+                    color: white;
+                    font-size: 48px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
                 }
 
-                ProviderCard {
-                    title: "Audible";
-                    has-logo: true;
-                    logo-source: @image-url("assets/Audible.png");
-                    brand-color: #F5A623;
-                    clicked => {
-                    }
+                // Tagline
+                Text {
+                    text: "YOUR MUSIC. ONE PLACE.";
+                    color: #ffffff55;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 4px;
+                    horizontal-alignment: center;
                 }
-            }
 
-            Rectangle {
-                height: 16px;
-            }
+                // Spacer
+                Rectangle {
+                    height: 20px;
+                }
 
-            HorizontalLayout {
-                alignment: center;
-                spacing: 28px;
+                // Thin divider line
+                Rectangle {
+                    height: 1px;
+                    background: #ffffff18;
+                    horizontal-stretch: 1;
+                }
 
-                ProviderCard {
-                    title: "Local";
-                    has-logo: true;
-                    logo-source: @image-url("assets/usb.svg");
-                    clicked => {
+                Rectangle {
+                    height: 16px;
+                }
+
+                // Section label
+                Text {
+                    text: "SELECT A PROVIDER";
+                    color: #ffffff40;
+                    font-size: 10px;
+                    font-weight: 700;
+                    letter-spacing: 3px;
+                    horizontal-alignment: center;
+                }
+
+                Rectangle {
+                    height: 16px;
+                }
+
+                // Provider cards row
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 28px;
+
+                    ProviderCard {
+                        title: "Spotify";
+                        has-logo: true;
+                        logo-source: @image-url("assets/spotify.svg");
+                        clicked => {
+                            root.open-spotify-provider();
+                        }
+                    }
+
+                    ProviderCard {
+                        title: "Tidal";
+                        has-logo: true;
+                        logo-source: @image-url("assets/Tidal.png");
+                        brand-color: #000000;
+                        clicked => {
+                        }
+                    }
+
+                    ProviderCard {
+                        title: "Audible";
+                        has-logo: true;
+                        logo-source: @image-url("assets/Audible.png");
+                        brand-color: #F5A623;
+                        clicked => {
+                        }
                     }
                 }
 
                 Rectangle {
-                    width: 220px;
+                    height: 16px;
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 28px;
+
+                    ProviderCard {
+                        title: "Local";
+                        has-logo: true;
+                        logo-source: @image-url("assets/usb.svg");
+                        clicked => {
+                        }
+                    }
+
+                    Rectangle {
+                        width: 220px;
+                    }
+
+                    Rectangle {
+                        width: 220px;
+                    }
                 }
 
                 Rectangle {
-                    width: 220px;
+                    height: 16px;
+                }
+
+                // Footer hint
+                Text {
+                    text: "More providers coming soon";
+                    color: #ffffff28;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
                 }
             }
 
+            // Gear button — top-right overlay
             Rectangle {
-                height: 16px;
-            }
+                x: parent.width - 56px;
+                y: 16px;
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: gear-touch.pressed ? #ffffff22 : (gear-touch.has-hover ? #ffffff11 : #00000033);
+                border-width: 1px;
+                border-color: gear-touch.has-hover ? #ffffff33 : #ffffff11;
 
-            // Footer hint
-            Text {
-                text: "More providers coming soon";
-                color: #ffffff28;
-                font-size: 11px;
-                horizontal-alignment: center;
-            }
+                animate background { duration: 150ms; }
 
-            Rectangle {
-                vertical-stretch: 1;
+                Image {
+                    source: @image-url("assets/settings.svg");
+                    width: 20px;
+                    height: 20px;
+                    colorize: #ffffffcc;
+                }
+
+                gear-touch := TouchArea {
+                    clicked => { root.active-view = "settings"; }
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+
+        // --- SETTINGS ---
+        if active-view == "settings": Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            Settings {
+                width: 100%;
+                height: 100%;
+                wifi-networks: root.settings-wifi-networks;
+                bluetooth-devices: root.settings-bluetooth-devices;
+                wifi-scanning: root.settings-wifi-scanning;
+                bluetooth-scanning: root.settings-bluetooth-scanning;
+                current-device-name: root.settings-current-device-name;
+                status-message: root.settings-status-message;
+                go-back => { root.active-view = "home"; }
+                scan-wifi => { root.settings-scan-wifi(); }
+                connect-wifi(ssid, pwd) => { root.settings-connect-wifi(ssid, pwd); }
+                update-device-name(name) => { root.settings-update-device-name(name); }
+                scan-bluetooth => { root.settings-scan-bluetooth(); }
+                connect-bluetooth(mac) => { root.settings-connect-bluetooth(mac); }
+                backspace-pressed(s) => { root.backspace-pressed(s) }
             }
         }
 
@@ -397,13 +475,12 @@ export component MainWindow inherits Window {
         }
 
         // --- SPOTIFY SEARCH ---
-        if active-view == "spotify-search": VerticalLayout {
+        if active-view == "spotify-search": Rectangle {
             vertical-stretch: 1;
-            padding-top: 12px;
-            padding-bottom: 12px;
-            padding-left: 20px;
-            padding-right: 20px;
+            clip: true;
             SpotifySearch {
+                width: 100%;
+                height: 100%;
                 search-results: root.spotify-search-results;
                 has-more: root.spotify-has-more;
                 go-back => {

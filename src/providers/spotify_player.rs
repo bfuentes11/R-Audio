@@ -51,7 +51,7 @@ pub struct LibrespotPlayer {
     pub duration_ms: Arc<Mutex<u32>>,
     pub is_playing: Arc<Mutex<bool>>,
     pub is_playing_atom: Arc<AtomicBool>,
-    pub sample_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
+    pub sample_buffer: Arc<std::sync::Mutex<std::collections::VecDeque<f32>>>,
     mixer: Arc<Mutex<SoftMixer>>,
 }
 
@@ -100,8 +100,10 @@ impl LibrespotPlayer {
             mixer: Arc::clone(&mixer_arc),
         });
 
-        let sample_buffer: Arc<std::sync::Mutex<Vec<f32>>> =
-            Arc::new(std::sync::Mutex::new(Vec::with_capacity(176_400)));
+        let sample_buffer: Arc<std::sync::Mutex<std::collections::VecDeque<f32>>> =
+            Arc::new(std::sync::Mutex::new(
+                std::collections::VecDeque::with_capacity(crate::spectrum_analyzer::CAPTURE_BUFFER_LEN),
+            ));
         let capture_buf = Arc::clone(&sample_buffer);
 
         // 0.4.2: Player::new returns (Player, PlayerEventChannel) — no get_player_event_channel()
@@ -130,17 +132,23 @@ impl LibrespotPlayer {
                 tokio::select! {
                     event = raw_channel.recv() => {
                         match event {
-                            Some(PlayerEvent::Playing { position_ms, .. }) => {
-                                println!("[player] Playing: {}ms", position_ms);
+                            Some(PlayerEvent::Playing { position_ms, duration_ms, .. }) => {
+                                println!("[player] Playing: {}ms / {}ms", position_ms, duration_ms);
                                 *pos_bg.lock().await  = position_ms;
+                                if duration_ms > 0 {
+                                    *dur_bg.lock().await = duration_ms;
+                                }
                                 *play_bg.lock().await = true;
                                 play_atom_bg.store(true, Ordering::Relaxed);
                                 let dur = *dur_bg.lock().await;
                                 let _ = tx_bg.send(PlaybackEvent::Playing { position_ms, duration_ms: dur });
                             }
-                            Some(PlayerEvent::Paused { position_ms, .. }) => {
-                                println!("[player] Paused: {}ms", position_ms);
+                            Some(PlayerEvent::Paused { position_ms, duration_ms, .. }) => {
+                                println!("[player] Paused: {}ms / {}ms", position_ms, duration_ms);
                                 *pos_bg.lock().await  = position_ms;
+                                if duration_ms > 0 {
+                                    *dur_bg.lock().await = duration_ms;
+                                }
                                 *play_bg.lock().await = false;
                                 play_atom_bg.store(false, Ordering::Relaxed);
                                 let dur = *dur_bg.lock().await;
