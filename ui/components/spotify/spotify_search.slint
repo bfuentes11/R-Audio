@@ -28,10 +28,8 @@ export component SpotifySearch inherits Rectangle {
 
     VerticalBox {
         width: 100%;
-        height: root.keyboard-visible ? root.height - root.keyboard-height : root.height;
+        height: 100%;
         spacing: 20px;
-
-        animate height { duration: 300ms; easing: ease-out; }
         padding-top: 12px;
         padding-bottom: 12px;
         padding-left: 20px;

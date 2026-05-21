@@ -64,11 +64,9 @@ export component Settings inherits Rectangle {
 
     VerticalBox {
         width: 100%;
-        height: root.keyboard-visible ? root.height - root.keyboard-height : root.height;
+        height: 100%;
         spacing: 16px;
         padding: 20px;
-
-        animate height { duration: 300ms; easing: ease-out; }
 
         // --- Nav Header ---
         HorizontalLayout {
