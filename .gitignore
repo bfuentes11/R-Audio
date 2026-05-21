@@ -5,4 +5,5 @@
 /spotify-auth-worker
 .env
 .spotify_token_cache.json
-.claude/settings.local.json
+.claude/
+.skills-lock
