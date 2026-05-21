@@ -1,0 +1,84 @@
+name: Build Kiosk ISO
+
+on:
+  # Build automatically on pushes to main or the librespot branch
+  push:
+    branches: [main, librespot-0.4.2]
+  # Also allow one-click manual builds from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest   # x86_64 — matches the Surface Go 2's Intel CPU
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Rust toolchain ──────────────────────────────────────────────────
+      - name: Install Rust (stable, x86_64-unknown-linux-gnu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      # Cache Cargo registry + build artifacts between runs (~5 min savings)
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # ── 3. System build dependencies ───────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc \
+            libasound2-dev \
+            libssl-dev \
+            pkg-config \
+            libdbus-1-dev \
+            libfontconfig1-dev \
+            live-build \
+            xorriso \
+            squashfs-tools
+
+      # ── 4. Compile R-Audio binaries for Linux x86_64 ──────────────────────
+      - name: Build release binaries
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu
+          # Stage where build-iso.sh expects them
+          mkdir -p target/release
+          cp target/x86_64-unknown-linux-gnu/release/R-Audio    target/release/R-Audio
+          cp target/x86_64-unknown-linux-gnu/release/r-audio-setup target/release/r-audio-setup
+
+      # ── 5. Build the Debian Kiosk ISO ─────────────────────────────────────
+      - name: Build Kiosk ISO
+        run: |
+          cd kiosk-os
+          sudo bash build-iso.sh
+        timeout-minutes: 90   # live-build debootstraps a full Debian; give it time
+
+      # ── 6. Upload ISO as a downloadable artifact ───────────────────────────
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-audio-kiosk-iso
+          path: kiosk-os/r-audio-iso-build/live-image-amd64.hybrid.iso
+          retention-days: 14   # keeps the last two weeks of builds
+
+      # ── 7. On tagged releases, also publish as a GitHub Release asset ──────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: kiosk-os/r-audio-iso-build/live-image-amd64.hybrid.iso
+          name: R-Audio Kiosk ${{ github.ref_name }}
+          body: |
+            Bootable Debian Bookworm kiosk ISO for the Surface Go 2.
+            Flash with Rufus (DD mode) or `dd`.

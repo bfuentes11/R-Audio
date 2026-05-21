@@ -9,9 +9,309 @@ use providers::{AudioProvider, Track};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use slint::Model;
-use rspotify::prelude::*;
+use rspotify::clients::BaseClient;
 
 use crate::providers::spotify_player::LibrespotPlayer;
+
+// ---------------------------------------------------------------------------
+// OOBE — first-run detection and Wi-Fi setup helpers
+// ---------------------------------------------------------------------------
+
+fn oobe_flag_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home).join(".config").join("r-audio").join("setup-done")
+}
+
+fn is_first_run() -> bool {
+    !oobe_flag_path().exists()
+}
+
+fn mark_setup_complete() {
+    let path = oobe_flag_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, "1");
+    println!("[oobe] Setup complete flag written.");
+}
+
+fn oobe_start_hotspot() {
+    if cfg!(target_os = "linux") {
+        let _ = std::process::Command::new("nmcli")
+            .args(["device", "wifi", "hotspot", "ssid", "R-Audio-Setup"])
+            .spawn();
+    } else {
+        println!("[oobe] Simulating hotspot start.");
+    }
+}
+
+fn oobe_stop_hotspot() {
+    if cfg!(target_os = "linux") {
+        let _ = std::process::Command::new("nmcli")
+            .args(["connection", "down", "Hotspot"])
+            .status();
+    } else {
+        println!("[oobe] Simulating hotspot stop.");
+    }
+}
+
+fn oobe_connect_wifi(ssid: &str, password: &str) -> bool {
+    if cfg!(target_os = "linux") {
+        let mut args = vec!["device", "wifi", "connect", ssid];
+        if !password.is_empty() {
+            args.extend_from_slice(&["password", password]);
+        }
+        std::process::Command::new("nmcli")
+            .args(&args)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else {
+        println!("[oobe] Simulating Wi-Fi connect to '{}'", ssid);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        true
+    }
+}
+
+fn oobe_check_internet() -> bool {
+    use std::net::ToSocketAddrs;
+    "api.spotify.com:80"
+        .to_socket_addrs()
+        .map(|mut a| a.next().is_some())
+        .unwrap_or(false)
+}
+
+fn oobe_scan_networks() -> Vec<(String, String)> {
+    if cfg!(target_os = "linux") {
+        let Ok(out) = std::process::Command::new("nmcli")
+            .args(["-t", "-f", "SSID,SIGNAL", "device", "wifi", "list"])
+            .output()
+        else {
+            return vec![];
+        };
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let mut nets = vec![];
+        for line in text.lines() {
+            let parts: Vec<&str> = line.splitn(2, ':').collect();
+            if parts.len() >= 2 {
+                let ssid = parts[0].trim().to_string();
+                let signal = parts[1].trim().to_string();
+                if !ssid.is_empty() && !nets.iter().any(|(s, _): &(String, String)| s == &ssid) {
+                    nets.push((ssid, signal));
+                }
+            }
+        }
+        nets
+    } else {
+        vec![
+            ("Home-WiFi-5G".to_string(), "95".to_string()),
+            ("CoffeeShop_Guest".to_string(), "72".to_string()),
+            ("Kiosk_Internal".to_string(), "60".to_string()),
+        ]
+    }
+}
+
+fn oobe_parse_form(body: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for pair in body.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+            let key = urlencoding::decode(k)
+                .unwrap_or_else(|_| std::borrow::Cow::Borrowed(k))
+                .into_owned();
+            let val = urlencoding::decode(v)
+                .unwrap_or_else(|_| std::borrow::Cow::Borrowed(v))
+                .into_owned();
+            map.insert(key, val);
+        }
+    }
+    map
+}
+
+fn oobe_start_http_server(tx: tokio::sync::mpsc::Sender<(String, String)>) {
+    std::thread::spawn(move || {
+        let server = match tiny_http::Server::http("0.0.0.0:8888") {
+            Ok(s) => s,
+            Err(e) => { eprintln!("[oobe] HTTP server bind failed: {}", e); return; }
+        };
+        println!("[oobe] Wi-Fi config server listening on :8888");
+        for mut req in server.incoming_requests() {
+            let url = req.url().to_string();
+            if url == "/wifi" || url == "/" {
+                let networks = oobe_scan_networks();
+                let mut options = String::new();
+                for (ssid, signal) in networks {
+                    let esc = ssid.replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;");
+                    options.push_str(&format!(
+                        "<option value=\"{esc}\">{esc} ({signal}%)</option>\n"
+                    ));
+                }
+                let html = format!(r#"<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>R-Audio Wi-Fi Setup</title>
+<style>
+body{{background:linear-gradient(135deg,#102a4e 0%,#0a182d 100%);color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:0;padding:20px;display:flex;justify-content:center;align-items:center;min-height:100vh;box-sizing:border-box}}
+.card{{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:30px;width:100%;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,.37);backdrop-filter:blur(8px)}}
+h2{{margin-top:0;font-weight:800;color:#4b9beb;letter-spacing:1px}}
+p{{color:rgba(255,255,255,.7);font-size:14px;line-height:1.5}}
+.fg{{margin-bottom:20px}}
+label{{display:block;margin-bottom:8px;font-size:12px;font-weight:700;letter-spacing:1px;color:rgba(255,255,255,.5)}}
+select,input{{width:100%;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.2);color:#fff;font-size:16px;box-sizing:border-box}}
+button{{width:100%;padding:14px;border:none;border-radius:8px;background:#2b7bc5;color:#fff;font-weight:700;font-size:16px;cursor:pointer}}
+button:hover{{background:#4b9beb}}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>R-Audio</h2>
+<p>Select your Wi-Fi network to connect this kiosk to the internet.</p>
+<form action="/connect" method="POST">
+<div class="fg"><label>WI-FI NETWORK</label><select name="ssid" required>{options}</select></div>
+<div class="fg"><label>PASSWORD</label><input type="password" name="password" placeholder="Leave blank if open"></div>
+<button type="submit">Connect</button>
+</form>
+</div>
+</body>
+</html>"#);
+                let resp = tiny_http::Response::from_string(html).with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap()
+                );
+                let _ = req.respond(resp);
+            } else if req.method() == &tiny_http::Method::Post && url == "/connect" {
+                let mut body = String::new();
+                if req.as_reader().read_to_string(&mut body).is_ok() {
+                    let params = oobe_parse_form(&body);
+                    let ssid = params.get("ssid").cloned().unwrap_or_default();
+                    let password = params.get("password").cloned().unwrap_or_default();
+                    let ack = tiny_http::Response::from_string(
+                        r#"<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Connecting…</title>
+<style>body{background:linear-gradient(135deg,#102a4e,#0a182d);color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}
+.card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:30px;max-width:380px;text-align:center}
+h2{color:#4b9beb;margin-top:0}</style></head>
+<body><div class="card"><h2>Connecting…</h2><p>You can close this tab and watch the kiosk screen.</p></div></body></html>"#
+                    ).with_header(
+                        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap()
+                    );
+                    let _ = req.respond(ack);
+                    let _ = tx.blocking_send((ssid, password));
+                }
+            } else {
+                let _ = req.respond(tiny_http::Response::from_string("Not Found").with_status_code(404));
+            }
+        }
+    });
+}
+
+async fn start_oobe_wifi(
+    ui_handle: slint::Weak<MainWindow>,
+    spotify: Arc<SpotifyProvider>,
+    player: Arc<Mutex<Option<Arc<LibrespotPlayer>>>>,
+    go_next: impl Fn() + Clone + Send + 'static,
+) {
+    let setup_url = "http://10.42.0.1:8888/wifi";
+
+    // Generate QR code — keep as SharedPixelBuffer (Send) until inside invoke_from_event_loop
+    let qr_buf: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> =
+        match qrcode_generator::to_png_to_vec(setup_url, qrcode_generator::QrCodeEcc::Low, 250) {
+            Ok(png) => {
+                if let Ok(img) = image::load_from_memory(&png) {
+                    let buf = img.to_rgba8();
+                    Some(slint::SharedPixelBuffer::clone_from_slice(buf.as_raw(), buf.width(), buf.height()))
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        };
+
+    let _ = slint::invoke_from_event_loop({
+        let h = ui_handle.clone();
+        move || {
+            if let Some(ui) = h.upgrade() {
+                let qr_image = match qr_buf {
+                    Some(buf) => slint::Image::from_rgba8(buf),
+                    None => slint::Image::default(),
+                };
+                ui.set_oobe_wifi_qr_code(qr_image);
+                ui.set_oobe_wifi_status("Starting hotspot…".into());
+                ui.set_active_view("oobe-wifi".into());
+            }
+        }
+    });
+
+    oobe_start_hotspot();
+    // Give nmcli a moment to bring up the interface
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let _ = slint::invoke_from_event_loop({
+        let h = ui_handle.clone();
+        move || {
+            if let Some(ui) = h.upgrade() {
+                ui.set_oobe_wifi_status("Hotspot active — scan the QR code from your phone.".into());
+            }
+        }
+    });
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, String)>(1);
+    oobe_start_http_server(tx);
+
+    while let Some((ssid, password)) = rx.recv().await {
+        let _ = slint::invoke_from_event_loop({
+            let h = ui_handle.clone();
+            let s = ssid.clone();
+            move || {
+                if let Some(ui) = h.upgrade() {
+                    ui.set_oobe_wifi_status(format!("Connecting to {}…", s).into());
+                }
+            }
+        });
+
+        oobe_stop_hotspot();
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        let connected = tokio::task::spawn_blocking({
+            let ssid = ssid.clone();
+            let pass = password.clone();
+            move || {
+                if oobe_connect_wifi(&ssid, &pass) {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    oobe_check_internet()
+                } else {
+                    false
+                }
+            }
+        }).await.unwrap_or(false);
+
+        if connected {
+            println!("[oobe] Wi-Fi connected. Proceeding to Spotify pairing.");
+            let _ = slint::invoke_from_event_loop({
+                let h = ui_handle.clone();
+                move || {
+                    if let Some(ui) = h.upgrade() {
+                        ui.set_oobe_wifi_status("Connected! Setting up Spotify…".into());
+                    }
+                }
+            });
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            start_pairing_flow(ui_handle, spotify, player, go_next);
+            return;
+        } else {
+            println!("[oobe] Wi-Fi connection failed. Restarting hotspot.");
+            oobe_start_hotspot();
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let _ = slint::invoke_from_event_loop({
+                let h = ui_handle.clone();
+                move || {
+                    if let Some(ui) = h.upgrade() {
+                        ui.set_oobe_wifi_status("Connection failed — try again.".into());
+                    }
+                }
+            });
+        }
+    }
+}
 
 slint::include_modules!();
 
@@ -33,128 +333,250 @@ thread_local! {
 async fn process_tracks(
     tracks: Vec<Track>,
 ) -> Vec<TrackItem> {
+    let len = tracks.len();
+    let mut slots: Vec<Option<TrackItem>> = (0..len).map(|_| None).collect();
     let mut join_set = tokio::task::JoinSet::new();
 
     for (index, track) in tracks.into_iter().enumerate() {
         let t_id = track.id.clone();
         let t_url = track.album_url.clone();
-        
+
         join_set.spawn(async move {
             let image_buffer = utils::fetch_and_cache_image(&t_id, &t_url).await;
             (index, track, image_buffer)
         });
     }
 
-    let mut results = Vec::new();
     while let Some(res) = join_set.join_next().await {
         if let Ok((index, track, image_buffer)) = res {
-            results.push((index, track, image_buffer));
+            slots[index] = Some(TrackItem {
+                title: track.title,
+                artist: track.artist,
+                artist_id: track.artist_id,
+                id: track.id,
+                duration: track.duration_str,
+                image_buffer,
+            });
         }
     }
 
-    // Sort by original index to guarantee perfect sequence ordering!
-    results.sort_by_key(|(idx, _, _)| *idx);
-
-    results.into_iter().map(|(_, track, image_buffer)| TrackItem {
-        title: track.title,
-        artist: track.artist,
-        artist_id: track.artist_id,
-        id: track.id,
-        duration: track.duration_str,
-        image_buffer,
-    }).collect()
+    slots.into_iter().flatten().collect()
 }
 
-async fn initialize_audio_player(
+/// Returns how long until `expires_at` minus `margin_secs`, or `None` if
+/// the deadline is already in the past or the expiry is unknown.
+fn duration_until_token_expiry(
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    margin_secs: i64,
+) -> Option<std::time::Duration> {
+    let target = expires_at? - chrono::Duration::seconds(margin_secs);
+    let remaining = (target - chrono::Utc::now()).num_seconds();
+    if remaining > 0 {
+        Some(std::time::Duration::from_secs(remaining as u64))
+    } else {
+        None
+    }
+}
+
+/// Spawns the long-running audio-session manager. The task connects to
+/// librespot, drives the event pump, and reconnects on:
+///   • `SessionLost`  — librespot worker died (token expired, AP disconnect, etc.)
+///   • pre-emptive    — token is 5 minutes from expiry; we rebuild cleanly before
+///                       Spotify can yank the AP connection mid-song.
+/// After every reconnect, if a track was playing it is resumed at its last
+/// known position.
+fn initialize_audio_player(
     user_name: String,
-    token: String,
+    initial_token: String,
+    spotify_provider: Arc<SpotifyProvider>,
     player_container: Arc<Mutex<Option<Arc<LibrespotPlayer>>>>,
     ui_handle: slint::Weak<MainWindow>,
     go_next: impl Fn() + Clone + Send + 'static,
 ) {
-    println!("[player] Initializing bare-metal Audio Engine...");
-    match LibrespotPlayer::new(&user_name, &token).await {
-        Ok((audio_player, mut player_events)) => {
-            let player_arc = Arc::new(audio_player);
+    tokio::spawn(async move {
+        let mut token = initial_token;
+        // Persists across reconnects so we can resume mid-song.
+        let mut resume_track: Option<String> = None;
+        let mut resume_position_ms: u32 = 0;
 
-            // Start (or restart) the FFT loop tied to this player's audio capture buffer
-            spawn_fft_loop(
-                Arc::clone(&player_arc.sample_buffer),
-                Arc::clone(&player_arc.is_playing_atom),
-            );
+        // Exponential backoff for repeated AP-construction failures. Doubles on each
+        // consecutive miss (5 → 10 → 20 → 40 → 60) and resets to base on success, so
+        // a flaky network won't tight-loop the AP and burn tokens.
+        const BACKOFF_BASE_SECS: u64 = 5;
+        const BACKOFF_MAX_SECS: u64 = 60;
+        let mut backoff_secs: u64 = BACKOFF_BASE_SECS;
 
-            *player_container.lock().await = Some(Arc::clone(&player_arc));
-
-            let ui_events = ui_handle.clone();
-            let go_next_clone = go_next.clone();
-            tokio::spawn(async move {
-                while let Some(event) = player_events.recv().await {
-                    let ui_ref = ui_events.clone();
-                    let go_next_inner = go_next_clone.clone();
-                    match event {
-                        crate::providers::spotify_player::PlaybackEvent::Playing { position_ms, duration_ms } => {
-                            println!("[main] Event: Playing {}/{}", position_ms, duration_ms);
-                            let progress = if duration_ms > 0 { position_ms as f32 / duration_ms as f32 } else { 0.0 };
-                            let cur_secs  = position_ms / 1000;
-                            let tot_secs  = duration_ms / 1000;
-                            let cur_str   = format!("{}:{:02}", cur_secs / 60, cur_secs % 60);
-                            let tot_str   = format!("{}:{:02}", tot_secs / 60, tot_secs % 60);
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(ui) = ui_ref.upgrade() {
-                                    ui.set_player_progress_percent(progress);
-                                    ui.set_player_current_time_str(cur_str.into());
-                                    ui.set_player_total_time_str(tot_str.into());
-                                    ui.set_player_is_playing(true);
-                                }
-                            });
-                        }
-                        crate::providers::spotify_player::PlaybackEvent::Progress { position_ms, duration_ms } => {
-                            let progress = if duration_ms > 0 { position_ms as f32 / duration_ms as f32 } else { 0.0 };
-                            let cur_secs  = position_ms / 1000;
-                            let tot_secs  = duration_ms / 1000;
-                            let cur_str   = format!("{}:{:02}", cur_secs / 60, cur_secs % 60);
-                            let tot_str   = format!("{}:{:02}", tot_secs / 60, tot_secs % 60);
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(ui) = ui_ref.upgrade() {
-                                    ui.set_player_progress_percent(progress);
-                                    ui.set_player_current_time_str(cur_str.into());
-                                    ui.set_player_total_time_str(tot_str.into());
-                                }
-                            });
-                        }
-                        crate::providers::spotify_player::PlaybackEvent::Paused { position_ms, duration_ms } => {
-                            println!("[main] Event: Paused {}/{}", position_ms, duration_ms);
-                            let progress = if duration_ms > 0 { position_ms as f32 / duration_ms as f32 } else { 0.0 };
-                            let cur_secs = position_ms / 1000;
-                            let cur_str  = format!("{}:{:02}", cur_secs / 60, cur_secs % 60);
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(ui) = ui_ref.upgrade() {
-                                    ui.set_player_is_playing(false);
-                                    ui.set_player_progress_percent(progress);
-                                    ui.set_player_current_time_str(cur_str.into());
-                                }
-                            });
-                        }
-                        crate::providers::spotify_player::PlaybackEvent::Stopped => {
-                            println!("[main] Event: Stopped");
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(ui) = ui_ref.upgrade() {
-                                    ui.set_player_is_playing(false);
-                                }
-                            });
-                        }
-                        crate::providers::spotify_player::PlaybackEvent::EndOfTrack => {
-                            println!("[main] Event: EndOfTrack received in event loop.");
-                            go_next_inner();
+        loop {
+            println!("[player] Initializing bare-metal Audio Engine...");
+            let (player_arc, mut player_events) = match LibrespotPlayer::new(&user_name, &token).await {
+                Ok((audio_player, events)) => {
+                    backoff_secs = BACKOFF_BASE_SECS;
+                    let arc = Arc::new(audio_player);
+                    // Start (or restart) the FFT loop tied to this player's capture buffer.
+                    spawn_fft_loop(
+                        Arc::clone(&arc.sample_buffer),
+                        Arc::clone(&arc.is_playing_atom),
+                    );
+                    *player_container.lock().await = Some(Arc::clone(&arc));
+                    (arc, events)
+                }
+                Err(e) => {
+                    println!("[player] Failed to initialize Audio Engine: {} — retry in {}s", e, backoff_secs);
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                    backoff_secs = (backoff_secs.saturating_mul(2)).min(BACKOFF_MAX_SECS);
+                    match spotify_provider.get_access_token().await {
+                        Ok(t) => { token = t; continue; }
+                        Err(e) => {
+                            println!("[player] Token refresh failed: {} — giving up", e);
+                            return;
                         }
                     }
                 }
-            });
+            };
+
+            // Resume the interrupted track if we reconnected mid-song.
+            if let Some(ref track_id) = resume_track {
+                println!("[player] Resuming '{}' at {}ms after reconnect", track_id, resume_position_ms);
+                player_arc.play(track_id).await;
+                if resume_position_ms > 0 {
+                    // Give librespot a moment to start buffering before seeking.
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    player_arc.seek(resume_position_ms).await;
+                }
+            }
+
+            // Schedule a pre-emptive reconnect 5 minutes before the token expires so
+            // we never let Spotify pull the AP connection out from under a live stream.
+            // Sleep MAX (effectively never) if the expiry is unknown.
+            let expires_at = spotify_provider.auth.token_expires_at().await;
+            let preempt_dur = duration_until_token_expiry(expires_at, 5 * 60)
+                .unwrap_or(std::time::Duration::MAX);
+            println!("[player] Pre-emptive reconnect scheduled in {:.0}s", preempt_dur.as_secs_f64());
+            let preempt_sleep = tokio::time::sleep(preempt_dur);
+            tokio::pin!(preempt_sleep);
+
+            // Snapshot of the currently-playing track updated by Playing/Progress events.
+            let mut current_position_ms: u32 = 0;
+            let mut session_lost = false;
+            let mut preempt_triggered = false;
+
+            loop {
+                let ui_ref = ui_handle.clone();
+                tokio::select! {
+                    event = player_events.recv() => {
+                        match event {
+                            None => break, // channel closed without SessionLost — clean exit
+                            Some(e) => match e {
+                                crate::providers::spotify_player::PlaybackEvent::Playing { position_ms, duration_ms } => {
+                                    println!("[main] Event: Playing {}/{}", position_ms, duration_ms);
+                                    current_position_ms = position_ms;
+                                    let progress = if duration_ms > 0 { position_ms as f32 / duration_ms as f32 } else { 0.0 };
+                                    let cur_secs  = position_ms / 1000;
+                                    let tot_secs  = duration_ms / 1000;
+                                    let cur_str   = format!("{}:{:02}", cur_secs / 60, cur_secs % 60);
+                                    let tot_str   = format!("{}:{:02}", tot_secs / 60, tot_secs % 60);
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = ui_ref.upgrade() {
+                                            ui.set_player_progress_percent(progress);
+                                            ui.set_player_current_time_str(cur_str.into());
+                                            ui.set_player_total_time_str(tot_str.into());
+                                            ui.set_player_is_playing(true);
+                                        }
+                                    });
+                                }
+                                crate::providers::spotify_player::PlaybackEvent::Progress { position_ms, duration_ms } => {
+                                    current_position_ms = position_ms;
+                                    let progress = if duration_ms > 0 { position_ms as f32 / duration_ms as f32 } else { 0.0 };
+                                    let cur_secs  = position_ms / 1000;
+                                    let tot_secs  = duration_ms / 1000;
+                                    let cur_str   = format!("{}:{:02}", cur_secs / 60, cur_secs % 60);
+                                    let tot_str   = format!("{}:{:02}", tot_secs / 60, tot_secs % 60);
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = ui_ref.upgrade() {
+                                            ui.set_player_progress_percent(progress);
+                                            ui.set_player_current_time_str(cur_str.into());
+                                            ui.set_player_total_time_str(tot_str.into());
+                                        }
+                                    });
+                                }
+                                crate::providers::spotify_player::PlaybackEvent::Paused { position_ms, duration_ms } => {
+                                    println!("[main] Event: Paused {}/{}", position_ms, duration_ms);
+                                    current_position_ms = position_ms;
+                                    let progress = if duration_ms > 0 { position_ms as f32 / duration_ms as f32 } else { 0.0 };
+                                    let cur_secs = position_ms / 1000;
+                                    let cur_str  = format!("{}:{:02}", cur_secs / 60, cur_secs % 60);
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = ui_ref.upgrade() {
+                                            ui.set_player_is_playing(false);
+                                            ui.set_player_progress_percent(progress);
+                                            ui.set_player_current_time_str(cur_str.into());
+                                        }
+                                    });
+                                }
+                                crate::providers::spotify_player::PlaybackEvent::Stopped => {
+                                    println!("[main] Event: Stopped");
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = ui_ref.upgrade() {
+                                            ui.set_player_is_playing(false);
+                                        }
+                                    });
+                                }
+                                crate::providers::spotify_player::PlaybackEvent::EndOfTrack => {
+                                    println!("[main] Event: EndOfTrack received in event loop.");
+                                    go_next();
+                                }
+                                crate::providers::spotify_player::PlaybackEvent::SessionLost => {
+                                    println!("[main] Event: SessionLost — reconnecting in 2s...");
+                                    session_lost = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ = &mut preempt_sleep => {
+                        println!("[player] Pre-emptive reconnect — token expiring soon, rebuilding session cleanly.");
+                        preempt_triggered = true;
+                        break;
+                    }
+                }
+
+            }
+
+            let needs_reconnect = session_lost || preempt_triggered;
+            if !needs_reconnect {
+                println!("[main] Player event channel closed cleanly — exiting session manager.");
+                return;
+            }
+
+            // Capture what was playing before we tear down the player.
+            // current_track_id on the player is updated by play(), so it's always
+            // the ground truth even if the event pump didn't see a Playing event yet.
+            if player_arc.get_is_playing().await {
+                resume_track = player_arc.current_track_id.lock().await.clone();
+                resume_position_ms = current_position_ms;
+            } else {
+                resume_track = None;
+                resume_position_ms = 0;
+            }
+
+            // Drop the dead/old player from the container before reconnecting.
+            *player_container.lock().await = None;
+            drop(player_arc);
+
+            let delay = if session_lost { 2 } else { 0 };
+            if delay > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            }
+
+            match spotify_provider.get_access_token().await {
+                Ok(t) => token = t,
+                Err(e) => {
+                    println!("[main] Reconnect failed — token error: {} — giving up", e);
+                    return;
+                }
+            }
         }
-        Err(e) => {
-            println!("[player] Failed to initialize Audio Engine: {}", e);
-        }
-    }
+    });
 }
 
 fn refresh_accounts_view(
@@ -261,6 +683,7 @@ fn start_pairing_flow(
             match rx.await {
                 Ok(Ok(())) => {
                     println!("[main] Pairing completed successfully!");
+                    mark_setup_complete();
                     run_authenticated_startup(ui_pairing, spotify_pairing, player_pairing, go_next_pairing, true).await;
                 }
                 Ok(Err(e)) => {
@@ -324,7 +747,14 @@ async fn run_authenticated_startup(
 
         let librespot_token = spotify_provider.get_access_token().await
             .expect("Failed to get access token for librespot");
-        initialize_audio_player(user_id, librespot_token, player_container.clone(), ui_handle.clone(), go_next).await;
+        initialize_audio_player(
+            user_id,
+            librespot_token,
+            Arc::clone(&spotify_provider),
+            player_container.clone(),
+            ui_handle.clone(),
+            go_next,
+        );
     } else {
         println!("[main] Audio Engine is already active for user ID {}. Skipping player initialization.", user_id);
         drop(player_lock);
@@ -406,6 +836,9 @@ fn spawn_dashboard_loader(
             }
         };
 
+        // Clone playlists once for the background crawler; move original into process_tracks.
+        let crawl_tracks = if !playlists_failed { playlists_tracks.clone() } else { vec![] };
+
         // Process and map tracks to UI immediately
         let (proc_recent, proc_playlists, proc_artists) = tokio::join!(
             process_tracks(recent_tracks),
@@ -432,6 +865,91 @@ fn spawn_dashboard_loader(
                 ui.set_spotify_is_loading(false);
             }
         });
+
+        // Spawn background crawler for user playlists tracks to populate the cache & index.
+        // Concurrency: 4-way fan-out turns a serial ~25s warm-up (50 playlists × ~500ms)
+        // into roughly ~6s. The Spotify Web API tolerates this burst, and the image
+        // fetcher's own semaphore still bounds the downstream decode work.
+        if !playlists_failed {
+            let crawl_spotify = Arc::clone(&init_spotify);
+            let crawl_playlists = crawl_tracks;
+            let crawl_ui = init_ui.clone();
+            tokio::spawn(async move {
+                println!("[main] Starting background crawl of user playlists ({} total)...", crawl_playlists.len());
+
+                // Read the currently-playing track once. The previous per-playlist re-read
+                // hopped to the UI thread N times and was racy (a track change mid-crawl
+                // would partially apply the "present" marker against the wrong track).
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let ui_for_id = crawl_ui.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let id = ui_for_id.upgrade()
+                        .map(|u| u.get_player_track_id().to_string())
+                        .unwrap_or_default();
+                    let _ = tx.send(id);
+                });
+                let current_track_id = rx.await.unwrap_or_default();
+                let clean_current_id = current_track_id
+                    .strip_prefix("spotify:track:")
+                    .unwrap_or(&current_track_id)
+                    .to_string();
+
+                let sem = Arc::new(tokio::sync::Semaphore::new(4));
+                let matching_playlist_ids: Arc<tokio::sync::Mutex<Vec<String>>> =
+                    Arc::new(tokio::sync::Mutex::new(Vec::new()));
+                let mut join_set = tokio::task::JoinSet::new();
+
+                for p in crawl_playlists {
+                    let pid = p.id.clone();
+                    let snap = p.duration_str.clone();
+                    let provider = Arc::clone(&crawl_spotify);
+                    let sem = Arc::clone(&sem);
+                    let clean_id = clean_current_id.clone();
+                    let matches = Arc::clone(&matching_playlist_ids);
+                    join_set.spawn(async move {
+                        let _permit = sem.acquire().await;
+                        match provider.get_playlist(&pid, &snap).await {
+                            Ok((_name, _owner, _cover, tracks)) => {
+                                println!("[main] Background crawl: loaded/cached playlist {}", pid);
+                                if !clean_id.is_empty() {
+                                    let hit = tracks.iter().any(|t| {
+                                        t.id.strip_prefix("spotify:track:").unwrap_or(&t.id) == clean_id
+                                    });
+                                    if hit {
+                                        matches.lock().await.push(pid);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("[main] Background crawl failed for playlist {}: {}", pid, e);
+                            }
+                        }
+                    });
+                }
+                while join_set.join_next().await.is_some() {}
+
+                // Single O(N) UI sweep at the end instead of per-playlist O(N) scans.
+                let matches: Vec<String> = std::mem::take(&mut *matching_playlist_ids.lock().await);
+                if !matches.is_empty() {
+                    let ui_final = crawl_ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_final.upgrade() {
+                            let match_set: std::collections::HashSet<String> = matches.into_iter().collect();
+                            let playlists_model = ui.get_spotify_user_playlists();
+                            for i in 0..playlists_model.row_count() {
+                                if let Some(mut playlist) = playlists_model.row_data(i) {
+                                    if match_set.contains(&playlist.id.to_string()) {
+                                        playlist.artist_id = "present".into();
+                                        playlists_model.set_row_data(i, playlist);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                println!("[main] Background crawl of user playlists completed.");
+            });
+        }
 
         // Spawn background retry loop if any endpoint failed
         let needs_retry = recent_failed || playlists_failed || artists_failed;
@@ -1800,7 +2318,7 @@ async fn main() -> Result<(), slint::PlatformError> {
                     } else { None }
                 };
                 
-                if let Some((nid, _nurl)) = next_info {
+                if let Some((nid, _)) = next_info {
                     println!("[player] Preloading audio for next track: {}", nid);
                     let p_lock = p_next.lock().await;
                     if let Some(ref active_player) = *p_lock {
@@ -2020,6 +2538,70 @@ async fn main() -> Result<(), slint::PlatformError> {
         });
     });
 
+    // --- REMOVE FROM LIKED SONGS ---
+    let spotify_liked_remove = Arc::clone(&spotify);
+    let ui_liked_remove = ui_handle.clone();
+    ui.on_player_remove_from_liked_songs(move |track_id| {
+        let spotify_thread = Arc::clone(&spotify_liked_remove);
+        let tid = track_id.to_string();
+        let ui_thread = ui_liked_remove.clone();
+        tokio::spawn(async move {
+            println!("[main] Removing track {} from Liked Songs...", tid);
+            let provider = &*spotify_thread;
+            match provider.remove_track_from_liked_songs(&tid).await {
+                Ok(()) => {
+                    println!("[main] Successfully removed track {} from Liked Songs!", tid);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_thread.upgrade() {
+                            ui.set_player_is_liked(false);
+                            ui.set_player_is_saved(false);
+                        }
+                    });
+                }
+                Err(e) => {
+                    println!("[main] Failed to remove track {} from Liked Songs: {}", tid, e);
+                }
+            }
+        });
+    });
+
+    // --- REMOVE FROM PLAYLIST ---
+    let spotify_playlist_remove = Arc::clone(&spotify);
+    let ui_playlist_remove = ui_handle.clone();
+    ui.on_player_remove_from_playlist(move |track_id, playlist_id| {
+        let spotify_thread = Arc::clone(&spotify_playlist_remove);
+        let tid = track_id.to_string();
+        let pid = playlist_id.to_string();
+        let ui_thread = ui_playlist_remove.clone();
+        tokio::spawn(async move {
+            println!("[main] Removing track {} from playlist {}...", tid, pid);
+            let provider = &*spotify_thread;
+            match provider.remove_track_from_playlist(&tid, &pid).await {
+                Ok(()) => {
+                    println!("[main] Successfully removed track {} from playlist {}!", tid, pid);
+                    let pid_clone = pid.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_thread.upgrade() {
+                            let playlists_model = ui.get_spotify_user_playlists();
+                            for i in 0..playlists_model.row_count() {
+                                if let Some(mut playlist) = playlists_model.row_data(i) {
+                                    if playlist.id.to_string() == pid_clone {
+                                        playlist.artist_id = "".into();
+                                        playlists_model.set_row_data(i, playlist);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    println!("[main] Failed to remove track {} from playlist {}: {}", tid, pid, e);
+                }
+            }
+        });
+    });
+
     // --- PLAY NEXT INTERNAL ---
     let go_next = {
         let q = Arc::clone(&playback_queue);
@@ -2087,6 +2669,41 @@ async fn main() -> Result<(), slint::PlatformError> {
             if let Some(ui) = ui_cancel.upgrade() {
                 ui.set_active_view("home".into());
             }
+        }
+    });
+
+    // --- OOBE: GET STARTED (welcome → wifi setup) ---
+    ui.on_oobe_get_started({
+        let ui_h = ui_handle.clone();
+        let sp = Arc::clone(&spotify);
+        let pl = Arc::clone(&player);
+        let gn = go_next.clone();
+        move || {
+            let ui_h = ui_h.clone();
+            let sp = Arc::clone(&sp);
+            let pl = Arc::clone(&pl);
+            let gn = gn.clone();
+            tokio::spawn(async move {
+                start_oobe_wifi(ui_h, sp, pl, gn).await;
+            });
+        }
+    });
+
+    // --- OOBE: SKIP WIFI (go straight to Spotify pairing) ---
+    ui.on_oobe_skip_wifi({
+        let ui_h = ui_handle.clone();
+        let sp = Arc::clone(&spotify);
+        let pl = Arc::clone(&player);
+        let gn = go_next.clone();
+        move || {
+            let ui_h = ui_h.clone();
+            let sp = Arc::clone(&sp);
+            let pl = Arc::clone(&pl);
+            let gn = gn.clone();
+            tokio::spawn(async move {
+                oobe_stop_hotspot();
+                start_pairing_flow(ui_h, sp, pl, gn);
+            });
         }
     });
 
@@ -2249,6 +2866,19 @@ async fn main() -> Result<(), slint::PlatformError> {
     let go_next_clone = go_next.clone();
 
     tokio::spawn(async move {
+        if is_first_run() {
+            println!("[main] First run detected — launching OOBE.");
+            let _ = slint::invoke_from_event_loop({
+                let h = init_ui.clone();
+                move || {
+                    if let Some(ui) = h.upgrade() {
+                        ui.set_active_view("oobe-welcome".into());
+                    }
+                }
+            });
+            return;
+        }
+
         let is_valid = {
             let provider = &*init_spotify;
             provider.auth.is_session_valid().await

@@ -32,13 +32,19 @@ impl Sink for CaptureSink {
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
         if let AudioPacket::Samples(ref samples) = packet {
             if let Ok(mut buf) = self.buffer.lock() {
-                // O(1) push_back; oldest samples roll off via pop_front when over capacity.
-                for &s in samples.iter() {
-                    if buf.len() == CAPTURE_BUFFER_LEN {
-                        buf.pop_front();
+                // Drop overflow in one bulk drain, then append the whole packet —
+                // far cheaper than per-sample pop_front/push_back at 44.1 kHz stereo.
+                let incoming = samples.len();
+                if incoming >= CAPTURE_BUFFER_LEN {
+                    buf.clear();
+                } else {
+                    let overflow = (buf.len() + incoming).saturating_sub(CAPTURE_BUFFER_LEN);
+                    if overflow > 0 {
+                        buf.drain(..overflow);
                     }
-                    buf.push_back(s as f32);
                 }
+                let take = incoming.min(CAPTURE_BUFFER_LEN);
+                buf.extend(samples[incoming - take..].iter().map(|&s| s as f32));
             }
         }
         self.inner.write(packet, converter)

@@ -43,6 +43,10 @@ pub enum PlaybackEvent {
         position_ms: u32,
         duration_ms: u32,
     },
+    /// Librespot worker thread exited (token expired, AP disconnect, kicked
+    /// by another device, etc). Subscribers should reauth and re-init the
+    /// player.
+    SessionLost,
 }
 
 pub struct LibrespotPlayer {
@@ -53,6 +57,8 @@ pub struct LibrespotPlayer {
     pub is_playing_atom: Arc<AtomicBool>,
     pub sample_buffer: Arc<std::sync::Mutex<std::collections::VecDeque<f32>>>,
     mixer: Arc<Mutex<SoftMixer>>,
+    /// Track ID of the most recently loaded track — used to resume after reconnect.
+    pub current_track_id: Arc<Mutex<Option<String>>>,
 }
 
 impl LibrespotPlayer {
@@ -172,7 +178,10 @@ impl LibrespotPlayer {
                                 }
                             }
                             None => {
-                                println!("[player] Event channel closed");
+                                println!("[player] Event channel closed — librespot worker exited");
+                                *play_bg.lock().await = false;
+                                play_atom_bg.store(false, Ordering::Relaxed);
+                                let _ = tx_bg.send(PlaybackEvent::SessionLost);
                                 break;
                             }
                             _ => {}
@@ -205,6 +214,7 @@ impl LibrespotPlayer {
                 is_playing_atom,
                 sample_buffer,
                 mixer: mixer_arc,
+                current_track_id: Arc::new(Mutex::new(None)),
             },
             event_rx,
         ))
@@ -212,6 +222,7 @@ impl LibrespotPlayer {
 
     pub async fn play(&self, track_id: &str) {
         if let Ok(id) = SpotifyId::from_base62(track_id) {
+            *self.current_track_id.lock().await = Some(track_id.to_string());
             *self.is_playing.lock().await = false;
             *self.duration_ms.lock().await = 0;
             self.player.lock().await.load(id, true, 0);

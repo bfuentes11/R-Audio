@@ -1,5 +1,9 @@
 [Unit]
 Description=R-Audio Kiosk Player Service
+# NOTE: This unit is NOT auto-enabled. The kiosk uses getty autologin ->
+# bash_profile -> startx -> xinitrc -> r-audio-launcher -> r-audio.
+# That chain self-restarts on crash. Use this unit only for manual
+# start/stop/restart via systemctl (e.g. during development).
 After=graphical.target sound.target network.target
 
 [Service]
@@ -7,8 +11,8 @@ Type=simple
 User=kiosk
 EnvironmentFile=/etc/default/r-audio
 Environment=DISPLAY=:0
-ExecStart=/usr/local/bin/r-audio
-Restart=always
+ExecStart=/usr/local/bin/r-audio-launcher
+Restart=on-failure
 RestartSec=3
 
 [Install]

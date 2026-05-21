@@ -46,7 +46,8 @@ lb config \
   --architectures amd64 \
   --distribution "$DEBIAN_VERSION" \
   --archive-areas "main contrib non-free non-free-firmware" \
-  --debian-installer false \
+  --debian-installer live \
+  --debian-installer-gui false \
   --memtest none \
   --parent-mirror-bootstrap "http://deb.debian.org/debian/"
 
@@ -57,6 +58,10 @@ cat <<EOF > config/package-lists/kiosk.list.chroot
 xserver-xorg
 xinit
 openbox
+xserver-xorg-input-libinput
+
+# OpenGL (required by Slint's Skia renderer)
+libgl1-mesa-dri
 
 # Audio Framework
 alsa-utils
@@ -67,12 +72,19 @@ avahi-daemon
 libavahi-compat-libdnssd1
 dbus-x11
 network-manager
+iw
+wpasupplicant
 
 # System essentials
 ca-certificates
 curl
 wget
 sudo
+debootstrap
+
+# Surface Go 2 hardware firmware (Wi-Fi, touchscreen)
+firmware-misc-nonfree
+firmware-iwlwifi
 
 # Bluetooth support
 bluez
@@ -99,7 +111,7 @@ cp "../$SETUP_BINARY_PATH" "$INCLUDES/usr/local/bin/r-audio-setup"
 chmod +x "$INCLUDES/usr/local/bin/r-audio-setup"
 
 # Copy the launcher orchestrator script
-cp ../kiosk-os/r-audio-launcher.sh "$INCLUDES/usr/local/bin/r-audio-launcher"
+cp ../r-audio-launcher.sh "$INCLUDES/usr/local/bin/r-audio-launcher"
 chmod +x "$INCLUDES/usr/local/bin/r-audio-launcher"
 
 # Copy the custom systemd player service
@@ -129,7 +141,7 @@ ExecStart=-/sbin/agetty --autologin kiosk --noclear %I \$TERM
 EOF
 
 # 6. Configure Bash Profile to start X Server dynamically on login
-cat <<EOF > "$INCLUDES/etc/home/kiosk/.bash_profile"
+cat <<EOF > "$INCLUDES/home/kiosk/.bash_profile"
 # Automatically launch bare Xorg when booting into TTY1
 if [ -z "\$DISPLAY" ] && [ "\$(tty)" = "/dev/tty1" ]; then
     exec startx -- -nocursor
@@ -147,12 +159,18 @@ mkdir -p config/hooks/normal
 cat <<'EOF' > config/hooks/normal/0900-create-kiosk-user.hook.chroot
 #!/bin/sh
 # Add the dedicated kiosk user and assign proper sound/video groups
-useradd -m -s /bin/bash -g users -G sudo,audio,video kiosk
+useradd -m -s /bin/bash -g users -G sudo,audio,video,input kiosk
 chown -R kiosk:users /home/kiosk
 chmod +x /home/kiosk/.xinitrc
 
-# Enable services
-systemctl enable r-audio
+# 2 GB swap file — prevents OOM during heavy workloads
+fallocate -l 2G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+# Enable services (r-audio is NOT enabled here — the getty autologin
+# restart loop handles that: getty -> bash_profile -> startx -> r-audio)
 systemctl enable avahi-daemon
 systemctl enable NetworkManager
 EOF

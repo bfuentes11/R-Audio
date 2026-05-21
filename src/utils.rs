@@ -1,9 +1,10 @@
 use std::path::Path;
 use slint::SharedPixelBuffer;
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::LazyLock;
-use tokio::sync::{RwLock, Semaphore};
+use lru::LruCache;
+use tokio::sync::{Mutex, Semaphore};
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
 
@@ -121,10 +122,11 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::n
 // Decoded-image cache keyed by Spotify image hash. SharedPixelBuffer is
 // reference-counted, so handing out clones costs nothing — many tracks in a
 // playlist or album share the same cover art and can all point at one buffer.
-// RwLock instead of Mutex: after the initial load, reads dominate writes, so
-// concurrent readers (e.g. 8 semaphore tasks) proceed without blocking each other.
-static IMAGE_MEM_CACHE: LazyLock<RwLock<HashMap<String, SharedPixelBuffer<slint::Rgba8Pixel>>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+// Bounded LRU so a long-running kiosk session doesn't accumulate every cover
+// ever scrolled past. ~512 covers ≈ a few MB at 300×300 RGBA.
+const IMAGE_CACHE_CAPACITY: usize = 512;
+static IMAGE_MEM_CACHE: LazyLock<Mutex<LruCache<String, SharedPixelBuffer<slint::Rgba8Pixel>>>> =
+    LazyLock::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(IMAGE_CACHE_CAPACITY).unwrap())));
 
 pub async fn fetch_and_cache_image(
     id: &str,
@@ -148,17 +150,21 @@ pub async fn fetch_and_cache_image(
 
     // Fast path: decoded buffer already in memory (shared across all tracks
     // with the same cover art).
-    {
-        let mem = IMAGE_MEM_CACHE.read().await;
-        if let Some(buf) = mem.get(&mem_key) {
-            return Some(buf.clone());
-        }
+    if let Some(buf) = IMAGE_MEM_CACHE.lock().await.get(&mem_key).cloned() {
+        return Some(buf);
     }
 
     if Path::new(&cache_path).exists() {
         if let Ok(bytes) = tokio::fs::read(&cache_path).await {
             if let Ok(Some(buf)) = tokio::task::spawn_blocking(move || decode_image(&bytes)).await {
-                IMAGE_MEM_CACHE.write().await.insert(mem_key, buf.clone());
+                // Another task may have decoded the same image while we were on the
+                // blocking pool. Prefer the existing entry so all callers share one
+                // SharedPixelBuffer instead of holding parallel decoded copies.
+                let mut cache = IMAGE_MEM_CACHE.lock().await;
+                if let Some(existing) = cache.get(&mem_key).cloned() {
+                    return Some(existing);
+                }
+                cache.put(mem_key, buf.clone());
                 return Some(buf);
             }
         }
@@ -168,11 +174,8 @@ pub async fn fetch_and_cache_image(
         let _permit = IMAGE_SEMAPHORE.acquire().await;
         // Re-check the cache after waiting on the semaphore — another task may
         // have decoded the same image while we were queued.
-        {
-            let mem = IMAGE_MEM_CACHE.read().await;
-            if let Some(buf) = mem.get(&mem_key) {
-                return Some(buf.clone());
-            }
+        if let Some(buf) = IMAGE_MEM_CACHE.lock().await.get(&mem_key).cloned() {
+            return Some(buf);
         }
         if let Ok(response) = HTTP_CLIENT.get(url).send().await {
             if let Ok(bytes) = response.bytes().await {
@@ -181,7 +184,12 @@ pub async fn fetch_and_cache_image(
 
                 let bytes_vec = bytes.to_vec();
                 if let Ok(Some(buf)) = tokio::task::spawn_blocking(move || decode_image(&bytes_vec)).await {
-                    IMAGE_MEM_CACHE.write().await.insert(mem_key, buf.clone());
+                    // Same race window as the disk path — prefer an existing entry.
+                    let mut cache = IMAGE_MEM_CACHE.lock().await;
+                    if let Some(existing) = cache.get(&mem_key).cloned() {
+                        return Some(existing);
+                    }
+                    cache.put(mem_key, buf.clone());
                     return Some(buf);
                 }
             }

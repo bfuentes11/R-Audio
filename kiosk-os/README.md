@@ -42,8 +42,20 @@ The target system boots in **under 10 seconds** directly into the glassmorphic p
 ### Prerequisites
 You must run the build script on a **Debian or Ubuntu host** (or within a VM). Sudo/root permissions are required because it runs kernel `chroot` commands to mount and package the root squash filesystem.
 
+> **Developing on Windows?** The ISO builder needs a Linux binary, so you must cross-compile first. The easiest path is WSL2:
+> ```bash
+> # In WSL2 (Ubuntu/Debian)
+> rustup target add x86_64-unknown-linux-gnu
+> sudo apt install gcc libasound2-dev libssl-dev pkg-config
+> cargo build --release --target x86_64-unknown-linux-gnu
+> # The binary lands at target/x86_64-unknown-linux-gnu/release/R-Audio
+> # Copy it to target/release/R-Audio before running the ISO builder
+> cp target/x86_64-unknown-linux-gnu/release/R-Audio target/release/R-Audio
+> cp target/x86_64-unknown-linux-gnu/release/r-audio-setup target/release/r-audio-setup
+> ```
+
 ### Step 1: Compile the R-Audio Release Binary
-On your development machine, compile the R-Audio application in release mode:
+On a Linux host (or WSL2), compile the R-Audio application in release mode:
 ```bash
 cargo build --release
 ```

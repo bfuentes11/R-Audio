@@ -30,8 +30,15 @@ export component PlayerBar inherits Rectangle {
     callback seek(float);
     callback change-volume(float);
     callback add-to-liked-songs(string);
+    callback remove-from-liked-songs(string);
     callback add-to-playlist(string, string);
+    callback remove-from-playlist(string, string);
     callback expand();
+
+    // Floating menu state
+    private property <string> pending-action: "";       // "" | "liked" | playlist-id
+    private property <string> pending-playlist-name: "";
+    private property <bool> pending-playlist-present: false;
 
 
     // --- 1. TRUE CENTERED PLAYER CONTROLS (FULL WIDTH CONTAINER) ---
@@ -371,13 +378,16 @@ export component PlayerBar inherits Rectangle {
     // --- 4. FLOATING ACTIONS MENU (Popup) ---
     if root.show-actions-menu: Rectangle {
         x: 24px;
-        y: -210px;
-        width: 260px;
-        height: 200px;
-        background: #181818ee;
-        border-radius: 12px;
+        y: -510px;
+        width: 560px;
+        height: 500px;
+        background: @linear-gradient(135deg, #1e1e24ef 0%, #121214fa 100%);
+        border-radius: 16px;
         border-width: 1px;
-        border-color: #ffffff15;
+        border-color: #ffffff18;
+        drop-shadow-color: #000000aa;
+        drop-shadow-blur: 16px;
+        drop-shadow-offset-y: 8px;
         clip: true;
 
         // Block event fallthrough to elements under the popup
@@ -387,155 +397,349 @@ export component PlayerBar inherits Rectangle {
         }
 
         VerticalLayout {
-            padding: 12px;
-            spacing: 8px;
+            padding: 20px;
+            spacing: 16px;
 
+            // Header with title and close button
             HorizontalLayout {
                 alignment: space-between;
                 Text {
-                    text: "Add to...";
+                    text: root.pending-action == "" ? "Add to..." : "Confirm";
                     color: white;
-                    font-size: 13px;
+                    font-size: 18px;
                     font-weight: 700;
                     vertical-alignment: center;
                 }
 
                 close-menu-btn := TouchArea {
-                    width: 20px;
-                    height: 20px;
+                    width: 28px;
+                    height: 28px;
                     mouse-cursor: pointer;
-                    clicked => { root.show-actions-menu = false; }
-                    Text {
-                        text: "×";
-                        color: close-menu-btn.has-hover ? white : #888888;
-                        font-size: 18px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    clicked => {
+                        root.pending-action = "";
+                        root.show-actions-menu = false;
+                    }
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: 14px;
+                        background: close-menu-btn.has-hover ? #ffffff15 : transparent;
+                        animate background { duration: 150ms; }
+                        Text {
+                            text: "×";
+                            color: close-menu-btn.has-hover ? white : #aaaaaa;
+                            font-size: 20px;
+                            font-weight: 500;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            animate color { duration: 150ms; }
+                        }
                     }
                 }
             }
 
             Rectangle {
                 height: 1px;
-                background: #ffffff10;
+                background: #ffffff12;
             }
 
-            liked-option := TouchArea {
-                height: 32px;
-                mouse-cursor: pointer;
-                clicked => {
-                    if (!root.is-liked) {
-                        root.add-to-liked-songs(root.track-id);
-                    }
-                    root.show-actions-menu = false;
-                }
-                Rectangle {
-                    width: 100%;
-                    height: 100%;
-                    border-radius: 6px;
-                    background: liked-option.pressed ? #ffffff22 : (liked-option.has-hover ? #ffffff11 : transparent);
-                    animate background { duration: 100ms; }
+            // Show list or confirmation UI
+            if root.pending-action == "": VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 14px;
 
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        alignment: space-between;
-                        
+                // Liked Songs option
+                liked-option := TouchArea {
+                    height: 56px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.pending-action = "liked";
+                    }
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: 8px;
+                        background: liked-option.pressed ? #ffffff22 : (liked-option.has-hover ? #ffffff11 : transparent);
+                        animate background { duration: 100ms; }
+
                         HorizontalLayout {
-                            spacing: 8px;
-                            alignment: start;
-                            
-                            Text {
-                                text: "♥";
-                                color: root.is-liked ? #1db954 : #b3b3b3;
-                                font-size: 14px;
-                                vertical-alignment: center;
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 14px;
+                            alignment: space-between;
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+
+                                // Icon container
+                                Rectangle {
+                                    width: 28px;
+                                    height: 28px;
+                                    border-radius: 6px;
+                                    background: root.is-liked ? #1db95420 : #ffffff0c;
+                                    y: (parent.height - self.height) / 2;
+                                    
+                                    Image {
+                                        source: @image-url("../assets/Heart.svg");
+                                        width: 15px;
+                                        height: 15px;
+                                        colorize: root.is-liked ? #1db954 : #888888;
+                                        animate colorize { duration: 150ms; }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Liked Songs";
+                                    color: root.is-liked ? #1db954 : white;
+                                    font-size: 16px;
+                                    font-weight: 500;
+                                    vertical-alignment: center;
+                                }
                             }
 
-                            Text {
-                                text: "Liked Songs";
-                                color: root.is-liked ? #1db954 : white;
-                                font-size: 13px;
-                                vertical-alignment: center;
+                            if root.is-liked: Rectangle {
+                                background: #1db9541a;
+                                border-radius: 12px;
+                                border-width: 1px;
+                                border-color: #1db95422;
+                                height: 24px;
+                                y: (parent.height - self.height) / 2;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 3px;
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    Text {
+                                        text: "✓";
+                                        color: #1db954;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: "Liked";
+                                        color: #1db954;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
+                                }
                             }
                         }
+                    }
+                }
+
+                Rectangle { height: 1px; background: #ffffff0a; }
+
+                Text {
+                    text: "PLAYLISTS";
+                    color: #ffffff55;
+                    font-size: 11px;
+                    font-weight: 800;
+                    letter-spacing: 1px;
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+
+                    VerticalLayout {
+                        spacing: 8px;
+                        for p in root.playlists: playlist-item := TouchArea {
+                            height: 48px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.pending-action = p.id;
+                                root.pending-playlist-name = p.title;
+                                root.pending-playlist-present = p.artist-id == "present";
+                            }
+                            Rectangle {
+                                width: 100%;
+                                height: 100%;
+                                border-radius: 8px;
+                                background: playlist-item.pressed ? #ffffff22 : (playlist-item.has-hover ? #ffffff11 : transparent);
+                                animate background { duration: 100ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    spacing: 14px;
+                                    alignment: space-between;
+
+                                    HorizontalLayout {
+                                        spacing: 12px;
+                                        alignment: start;
+
+                                        // Playlist cover art
+                                        Rectangle {
+                                            width: 36px;
+                                            height: 36px;
+                                            border-radius: 6px;
+                                            background: #282828;
+                                            clip: true;
+                                            y: (parent.height - self.height) / 2;
+                                            
+                                            Image {
+                                                source: p.album-art;
+                                                width: 100%;
+                                                height: 100%;
+                                                image-fit: cover;
+                                            }
+                                        }
+
+                                        Text {
+                                            text: p.title;
+                                            color: p.artist-id == "present" ? #1db954 : white;
+                                            font-size: 16px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    // Action status / button on the right
+                                    Rectangle {
+                                        width: 28px;
+                                        height: 28px;
+                                        y: (parent.height - self.height) / 2;
+                                        
+                                        Image {
+                                            source: p.artist-id == "present" ? @image-url("../assets/CheckBtn.svg") : @image-url("../assets/PlusBtn.svg");
+                                            width: 16px;
+                                            height: 16px;
+                                            colorize: p.artist-id == "present" ? #1db954 : (playlist-item.has-hover ? white : #888888);
+                                            animate colorize { duration: 150ms; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Confirmation UI
+            if root.pending-action != "": VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 16px;
+                alignment: center;
+
+                // Show selected item
+                if root.pending-action == "liked": Rectangle {
+                    height: 72px;
+                    border-radius: 10px;
+                    background: #1db9541a;
+                    border-width: 1px;
+                    border-color: #1db95433;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        alignment: center;
 
                         Text {
-                            text: root.is-liked ? "✓" : "+";
-                            color: root.is-liked ? #1db954 : #ffffff55;
-                            font-size: 13px;
-                            font-weight: 700;
+                            text: root.is-liked ? "Remove from Liked Songs?" : "Add to Liked Songs?";
+                            color: white;
+                            font-size: 16px;
+                            font-weight: 500;
                             vertical-alignment: center;
                         }
                     }
                 }
-            }
 
-            Rectangle { height: 4px; }
-            Text {
-                text: "PLAYLISTS";
-                color: #ffffff55;
-                font-size: 9px;
-                font-weight: 700;
-                letter-spacing: 1px;
-            }
+                if root.pending-action != "liked": Rectangle {
+                    height: 72px;
+                    width: 100%;
+                    border-radius: 10px;
+                    background: #1db9541a;
+                    border-width: 1px;
+                    border-color: #1db95433;
 
-            ScrollView {
-                vertical-stretch: 1;
-                min-height: 0px;
-                
-                VerticalLayout {
-                    spacing: 4px;
-                    for p in root.playlists: playlist-item := TouchArea {
-                        height: 28px;
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        alignment: center;
+
+                        Text {
+                            text: root.pending-playlist-present ? "Remove from " + root.pending-playlist-name + "?" : "Add to " + root.pending-playlist-name + "?";
+                            color: white;
+                            font-size: 16px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                Rectangle { height: 6px; }
+
+                // Done / Cancel buttons
+                HorizontalLayout {
+                    spacing: 16px;
+
+                    cancel-btn := TouchArea {
+                        height: 48px;
+                        horizontal-stretch: 1;
                         mouse-cursor: pointer;
                         clicked => {
-                            if (p.artist-id != "present") {
-                                root.add-to-playlist(root.track-id, p.id);
+                            root.pending-action = "";
+                        }
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            border-radius: 10px;
+                            background: cancel-btn.pressed ? #ffffff22 : (cancel-btn.has-hover ? #ffffff11 : transparent);
+                            border-width: 1px;
+                            border-color: #ffffff22;
+                            animate background { duration: 100ms; }
+
+                            Text {
+                                text: "Cancel";
+                                color: cancel-btn.has-hover ? white : #b3b3b3;
+                                font-size: 16px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                animate color { duration: 100ms; }
                             }
+                        }
+                    }
+
+                    done-btn := TouchArea {
+                        height: 48px;
+                        horizontal-stretch: 1;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (root.pending-action == "liked") {
+                                if (root.is-liked) {
+                                    root.remove-from-liked-songs(root.track-id);
+                                } else {
+                                    root.add-to-liked-songs(root.track-id);
+                                }
+                            } else if (root.pending-action != "") {
+                                if (root.pending-playlist-present) {
+                                    root.remove-from-playlist(root.track-id, root.pending-action);
+                                } else {
+                                    root.add-to-playlist(root.track-id, root.pending-action);
+                                }
+                            }
+                            root.pending-action = "";
                             root.show-actions-menu = false;
                         }
                         Rectangle {
                             width: 100%;
                             height: 100%;
-                            border-radius: 4px;
-                            background: playlist-item.pressed ? #ffffff22 : (playlist-item.has-hover ? #ffffff11 : transparent);
+                            border-radius: 10px;
+                            background: done-btn.pressed ? #1db95466 : (done-btn.has-hover ? #1db954 : #1db954cc);
                             animate background { duration: 100ms; }
 
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                spacing: 8px;
-                                alignment: space-between;
-                                
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: start;
-                                    
-                                    Text {
-                                        text: "♪";
-                                        color: p.artist-id == "present" ? #1db954 : #b3b3b3;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Text {
-                                        text: p.title;
-                                        color: p.artist-id == "present" ? #1db954 : white;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
-                                }
-
-                                Text {
-                                    text: p.artist-id == "present" ? "✓" : "+";
-                                    color: p.artist-id == "present" ? #1db954 : #ffffff55;
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    vertical-alignment: center;
-                                }
+                            Text {
+                                text: "Done";
+                                color: white;
+                                font-size: 16px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
                             }
                         }
                     }
