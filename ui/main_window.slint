@@ -1,4 +1,5 @@
 import { ScrollView, VerticalBox } from "std-widgets.slint";
+import { TextManip } from "globals.slint";
 import { ProviderCard } from "components/provider_card.slint";
 import {
     SpotifySearch,
@@ -21,7 +22,7 @@ import {
     UIBluetoothDevice,
 } from "components/settings.slint";
 
-export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice }
+export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice, TextManip }
 
 export component MainWindow inherits Window {
     preferred-width: 800px;
@@ -77,10 +78,6 @@ export component MainWindow inherits Window {
     callback open-artist(string);
     callback open-spotify-provider();
     callback open-album-by-id(string);  // opens an album directly by album ID
-    callback get-before-cursor(string, int) -> string;
-    callback get-after-cursor(string, int) -> string;
-    callback char-count(string) -> int;
-
     // Settings properties & callbacks
     in property <[UIWifiNetwork]> settings-wifi-networks: [];
     in property <[UIBluetoothDevice]> settings-bluetooth-devices: [];

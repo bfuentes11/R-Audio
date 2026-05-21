@@ -33,6 +33,7 @@ fn main() {
     println!("cargo:rerun-if-changed=material-1.0");
     println!("cargo:rerun-if-changed=ui/main_window.slint");
     println!("cargo:rerun-if-changed=ui/setup_window.slint");
+    println!("cargo:rerun-if-changed=ui/globals.slint");
 
     // Copy and preprocess material-1.0 to OUT_DIR
     copy_dir_all(manifest_dir.join("material-1.0"), &material_dst).unwrap();

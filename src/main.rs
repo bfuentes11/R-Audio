@@ -671,18 +671,18 @@ async fn main() -> Result<(), slint::PlatformError> {
         string.into()
     });
 
-    ui.on_char_count(|text| {
+    // TextManip global — used directly by VirtualKeyboard without per-site wiring
+    let text_manip = TextManip::get(&ui);
+    text_manip.on_char_count(|text| {
         text.to_string().chars().count() as i32
     });
-
-    ui.on_get_before_cursor(|text, pos| {
+    text_manip.on_get_before_cursor(|text, pos| {
         let text_str = text.to_string();
         let chars: Vec<char> = text_str.chars().collect();
         let pos = (pos.max(0) as usize).min(chars.len());
         chars[..pos].iter().collect::<String>().into()
     });
-
-    ui.on_get_after_cursor(|text, pos| {
+    text_manip.on_get_after_cursor(|text, pos| {
         let text_str = text.to_string();
         let chars: Vec<char> = text_str.chars().collect();
         let pos = (pos.max(0) as usize).min(chars.len());
