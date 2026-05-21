@@ -64,9 +64,11 @@ export component Settings inherits Rectangle {
 
     VerticalBox {
         width: 100%;
-        height: 100%;
+        height: root.keyboard-visible ? root.height - root.keyboard-height : root.height;
         spacing: 16px;
         padding: 20px;
+
+        animate height { duration: 300ms; easing: ease-out; }
 
         // --- Nav Header ---
         HorizontalLayout {
@@ -433,15 +435,6 @@ export component Settings inherits Rectangle {
                 }
             }
         }
-    }
-
-    // --- Scrim: tap outside to dismiss keyboard ---
-    if root.keyboard-visible : Rectangle {
-        x: 0; y: 0;
-        width: root.width;
-        height: root.height - root.keyboard-height;
-        background: #00000030;
-        TouchArea { clicked => { root.keyboard-visible = false; } }
     }
 
     // --- Sliding Keyboard Overlay ---
