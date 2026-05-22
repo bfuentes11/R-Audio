@@ -50,7 +50,6 @@ lb config \
   --debian-installer-gui false \
   --memtest none \
   --linux-flavours amd64 \
-  --syslinux-timeout 1 \
   --mirror-bootstrap "http://deb.debian.org/debian/" \
   --mirror-chroot "http://deb.debian.org/debian/" \
   --mirror-chroot-security "http://security.debian.org/debian-security/" \
@@ -163,17 +162,33 @@ chmod 440 "$INCLUDES/etc/sudoers.d/kiosk"
 # 7. Post-configuration setup (create kiosk user during image creation)
 mkdir -p config/hooks/normal
 
-# Binary-stage hook: patch grub to boot the live system immediately with no menu.
-# Runs after live-build generates the EFI/grub configs, before the ISO is assembled.
-# Covers both the BIOS path (isolinux) via --syslinux-timeout above and the
-# UEFI path (grub) here — the Surface Go 2 boots via UEFI.
+# Binary-stage hook: patch both bootloaders to boot the live system immediately.
+# Runs after live-build generates the configs, before the ISO is assembled.
+# The Surface Go 2 boots via UEFI (grub), but we patch both paths for completeness.
 cat <<'EOF' > config/hooks/normal/0100-autoboot.hook.binary
 #!/bin/sh
-for cfg in binary/boot/grub/grub.cfg binary/EFI/boot/grub.cfg; do
-    [ -f "$cfg" ] || continue
-    # Boot immediately — no countdown, no menu
-    sed -i 's/set timeout=.*/set timeout=0/'       "$cfg"
-    sed -i 's/set timeout_style=.*/set timeout_style=hidden/' "$cfg"
+set -e
+
+# UEFI / grub — boot immediately with no menu visible
+for cfg in binary/boot/grub/grub.cfg binary/EFI/boot/grub.cfg binary/EFI/debian/grub.cfg; do
+    if [ -f "$cfg" ]; then
+        sed -i 's/^set timeout=.*/set timeout=0/'                  "$cfg" || true
+        sed -i 's/^set timeout_style=.*/set timeout_style=hidden/' "$cfg" || true
+        # Inject the settings if the lines weren't present at all
+        grep -q '^set timeout='       "$cfg" || sed -i '1i set timeout=0'              "$cfg"
+        grep -q '^set timeout_style=' "$cfg" || sed -i '1i set timeout_style=hidden'   "$cfg"
+    fi
+done
+
+# BIOS / isolinux/syslinux — TIMEOUT is in 1/10 second units; 1 = 100ms
+for cfg in binary/isolinux/isolinux.cfg binary/isolinux/live.cfg binary/syslinux/syslinux.cfg; do
+    if [ -f "$cfg" ]; then
+        if grep -qi '^timeout' "$cfg"; then
+            sed -i 's/^[Tt][Ii][Mm][Ee][Oo][Uu][Tt].*/TIMEOUT 1/' "$cfg"
+        else
+            echo 'TIMEOUT 1' >> "$cfg"
+        fi
+    fi
 done
 EOF
 chmod +x config/hooks/normal/0100-autoboot.hook.binary
