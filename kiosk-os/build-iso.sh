@@ -280,12 +280,15 @@ mkdir -p config/hooks/normal
 cat <<'EOF' > config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
 #!/bin/sh
 # NOTE: live-build runs *.hook.binary scripts with CWD = ./binary (the build's
-# binary tree), NOT the live-build root. So all paths here are relative to
-# the future ISO root — e.g. ./install/initrd.gz, ./preseed.cfg, etc.
+# binary tree), NOT the live-build root. So paths here are relative to the
+# future ISO root — e.g. ./install/initrd.gz, ./preseed.cfg, etc.
+#
+# d-i's S30initrd-preseed startup script does this exact check:
+#     if [ -e /preseed.cfg ]; then preseed_location file:///preseed.cfg; fi
+# So our job is just to make sure /preseed.cfg exists at the root of the
+# initrd filesystem at boot time.
 set -e
 
-echo "[embed-preseed] cwd=$(pwd)"
-echo "[embed-preseed] locating installer initrd..."
 INITRD=$(find . -path '*install*' -name 'initrd.gz' -type f | head -n1)
 if [ -z "$INITRD" ]; then
     echo "[embed-preseed] ERROR: installer initrd not found under ./"
@@ -293,25 +296,48 @@ if [ -z "$INITRD" ]; then
     find . -name 'initrd*' -type f
     exit 1
 fi
-echo "[embed-preseed] found $INITRD"
+ORIG=$(wc -c < "$INITRD")
+echo "[embed-preseed] target: $INITRD (was $ORIG bytes)"
 
-# preseed.cfg was copied to the binary tree root by binary_includes
-# (from config/includes.binary/preseed.cfg in the live-build root).
 if [ ! -f ./preseed.cfg ]; then
     echo "[embed-preseed] ERROR: ./preseed.cfg missing from binary tree"
-    echo "[embed-preseed] tree top-level:"
     ls -la .
     exit 1
 fi
+echo "[embed-preseed] preseed.cfg: $(wc -c < ./preseed.cfg) bytes"
 
 WORK=$(mktemp -d)
+trap "rm -rf $WORK" EXIT
 cp ./preseed.cfg "$WORK/preseed.cfg"
-gunzip -c "$INITRD" > "$WORK/initrd-raw"
-( cd "$WORK" && echo preseed.cfg | cpio -o -H newc -A -F initrd-raw 2>/dev/null )
-gzip -9 < "$WORK/initrd-raw" > "$INITRD"
-rm -rf "$WORK"
 
-echo "[embed-preseed] success — initrd now $(wc -c < $INITRD) bytes"
+# Build a fresh gzip-compressed cpio archive containing only preseed.cfg
+# at the root, then concatenate it onto the existing initrd.gz.
+# The Linux initramfs loader natively merges multiple concatenated
+# (compressed) cpio archives into a single initramfs filesystem at boot.
+# Ref: kernel Documentation/early-userspace/buffer-format.txt
+#
+# This replaces the previous `cpio -o -A -F initrd-raw` approach, which
+# was silently failing to append for reasons unclear — d-i would boot
+# with no /preseed.cfg in the initrd and fall back to /cdrom/preseed.cfg
+# (which doesn't exist either on a USB-booted hybrid ISO).
+( cd "$WORK" && echo preseed.cfg | cpio -o -H newc ) > "$WORK/preseed.cpio" 2>"$WORK/cpio.log"
+cat "$WORK/cpio.log" >&2
+echo "[embed-preseed] cpio archive: $(wc -c < $WORK/preseed.cpio) bytes"
+
+gzip -9 < "$WORK/preseed.cpio" >> "$INITRD"
+
+NEW=$(wc -c < "$INITRD")
+APPENDED=$((NEW - ORIG))
+echo "[embed-preseed] initrd now $NEW bytes (+$APPENDED appended)"
+
+# A gzipped cpio archive containing one small file is ~150-300 bytes.
+# If we appended much less, the embed didn't happen.
+if [ "$APPENDED" -lt 100 ]; then
+    echo "[embed-preseed] ERROR: appended only $APPENDED bytes — embed failed"
+    exit 1
+fi
+
+echo "[embed-preseed] success"
 EOF
 chmod +x config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
 
