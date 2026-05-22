@@ -67,6 +67,34 @@ jobs:
             bash build-iso.sh
         timeout-minutes: 90   # live-build debootstraps a full Debian; give it time
 
+      # ── 5b. Inspect the built ISO's apt pool layout (offline-install debug) ──
+      # If the next install fails with "bad archive mirror", we want to see
+      # whether the CD apt pool is actually present and populated. Lists the
+      # top-level ISO contents, the dists/ index files, and how many .debs
+      # ended up in the pool. Runs even if the build failed.
+      - name: Inspect ISO apt pool
+        if: always()
+        run: |
+          BIN=kiosk-os/r-audio-iso-build/binary
+          if [ ! -d "$BIN" ]; then
+            echo "no binary/ — build may have failed before populating it"
+            exit 0
+          fi
+          echo "=== binary/ top level ==="
+          ls -la "$BIN" | head -30
+          echo
+          echo "=== binary/dists/ ==="
+          find "$BIN/dists" -type f 2>/dev/null | head -20 || echo "(no dists/)"
+          echo
+          echo "=== binary/pool/ deb count ==="
+          find "$BIN/pool" -name '*.deb' 2>/dev/null | wc -l || echo "(no pool/)"
+          echo
+          echo "=== kiosk packages we expect in pool ==="
+          for pkg in xserver-xorg openbox network-manager avahi-daemon firmware-iwlwifi; do
+            found=$(find "$BIN/pool" -name "${pkg}_*.deb" 2>/dev/null | head -1)
+            echo "  ${pkg}: ${found:-MISSING}"
+          done
+
       # ── 6. Upload ISO as a downloadable artifact ───────────────────────────
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
