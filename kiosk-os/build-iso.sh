@@ -279,25 +279,33 @@ mkdir -p config/hooks/normal
 # are untouched.
 cat <<'EOF' > config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
 #!/bin/sh
+# NOTE: live-build runs *.hook.binary scripts with CWD = ./binary (the build's
+# binary tree), NOT the live-build root. So all paths here are relative to
+# the future ISO root — e.g. ./install/initrd.gz, ./preseed.cfg, etc.
 set -e
 
+echo "[embed-preseed] cwd=$(pwd)"
 echo "[embed-preseed] locating installer initrd..."
-INITRD=$(find binary -path '*install*' -name 'initrd.gz' -type f | head -n1)
+INITRD=$(find . -path '*install*' -name 'initrd.gz' -type f | head -n1)
 if [ -z "$INITRD" ]; then
-    echo "[embed-preseed] ERROR: installer initrd not found under binary/"
+    echo "[embed-preseed] ERROR: installer initrd not found under ./"
     echo "[embed-preseed] available initrd files:"
-    find binary -name 'initrd*' -type f
+    find . -name 'initrd*' -type f
     exit 1
 fi
 echo "[embed-preseed] found $INITRD"
 
-if [ ! -f config/includes.binary/preseed.cfg ]; then
-    echo "[embed-preseed] ERROR: preseed.cfg missing from config/includes.binary/"
+# preseed.cfg was copied to the binary tree root by binary_includes
+# (from config/includes.binary/preseed.cfg in the live-build root).
+if [ ! -f ./preseed.cfg ]; then
+    echo "[embed-preseed] ERROR: ./preseed.cfg missing from binary tree"
+    echo "[embed-preseed] tree top-level:"
+    ls -la .
     exit 1
 fi
 
 WORK=$(mktemp -d)
-cp config/includes.binary/preseed.cfg "$WORK/preseed.cfg"
+cp ./preseed.cfg "$WORK/preseed.cfg"
 gunzip -c "$INITRD" > "$WORK/initrd-raw"
 ( cd "$WORK" && echo preseed.cfg | cpio -o -H newc -A -F initrd-raw 2>/dev/null )
 gzip -9 < "$WORK/initrd-raw" > "$INITRD"
