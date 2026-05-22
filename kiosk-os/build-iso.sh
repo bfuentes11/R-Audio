@@ -347,25 +347,14 @@ echo "[embed-preseed] success"
 EOF
 chmod +x config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
 
-cat <<'EOF' > config/hooks/normal/0900-create-kiosk-user.hook.chroot
-#!/bin/sh
-# Add the dedicated kiosk user and assign proper sound/video groups
-useradd -m -s /bin/bash -g users -G sudo,audio,video,input kiosk
-chown -R kiosk:users /home/kiosk
-chmod +x /home/kiosk/.xinitrc
-
-# 2 GB swap file — prevents OOM during heavy workloads
-fallocate -l 2G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab
-
-# Enable services (r-audio is NOT enabled here — the getty autologin
-# restart loop handles that: getty -> bash_profile -> startx -> r-audio)
-systemctl enable avahi-daemon
-systemctl enable NetworkManager
-EOF
-chmod +x config/hooks/normal/0900-create-kiosk-user.hook.chroot
+# NOTE: there is intentionally NO chroot hook here. With kiosk packages
+# now bundled in the binary apt pool (not installed in the live chroot),
+# `systemctl enable avahi-daemon` and `systemctl enable NetworkManager`
+# would fail in the chroot because those packages aren't there. d-i
+# handles kiosk user creation via preseed's passwd/make-user, swap is
+# handled by partman's `atomic` recipe (separate swap partition), and
+# postinstall.sh enables services on the installed system. Live mode
+# is now a bare-Debian debug shell — no kiosk runtime in it.
 
 # 10. Compile the ISO
 echo "Compiling the bootable hybrid Kiosk ISO..."
