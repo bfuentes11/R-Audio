@@ -222,7 +222,7 @@ set timeout=0
 set timeout_style=hidden
 
 menuentry "R-Audio Kiosk - Auto-Install (WIPES DISK)" {
-    linux   @KERNEL_DI@ auto=true priority=critical preseed/file=/cdrom/preseed.cfg vga=788 @APPEND_INSTALL@ --- quiet
+    linux   @KERNEL_DI@ auto=true priority=critical preseed/file=/preseed.cfg vga=788 @APPEND_INSTALL@ --- quiet
     initrd  @INITRD_DI@
 }
 
@@ -248,7 +248,7 @@ timeout 1
 label unattended
     linux  @KERNEL_DI@
     initrd @INITRD_DI@
-    append vga=788 auto=true priority=critical preseed/file=/cdrom/preseed.cfg @APPEND_INSTALL@ --- quiet
+    append vga=788 auto=true priority=critical preseed/file=/preseed.cfg @APPEND_INSTALL@ --- quiet
 
 label live
     linux  @KERNEL_LIVE@
@@ -261,8 +261,51 @@ label install
     append vga=788 @APPEND_INSTALL@ --- quiet
 ISOCFG
 
-# 9. Post-configuration setup (create kiosk user during image creation)
+# 9. Post-configuration setup
 mkdir -p config/hooks/normal
+
+# Binary-stage hook: embed preseed.cfg into the installer initrd.
+#
+# Without this, the kernel arg `preseed/file=/cdrom/preseed.cfg` fails on
+# USB-booted hybrid ISOs because d-i's cdrom-detect runs AFTER preseed
+# loading (Debian bug #847166), so /cdrom isn't mounted yet when d-i tries
+# to read the file. Embedding the preseed inside the initrd sidesteps the
+# whole mount-timing problem — d-i finds /preseed.cfg the moment the
+# initramfs is unpacked.
+#
+# Mechanism: the Linux initramfs loader concatenates multiple cpio archives,
+# so we just decompress the existing initrd, append a one-file cpio archive
+# containing preseed.cfg, and recompress. The original installer contents
+# are untouched.
+cat <<'EOF' > config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
+#!/bin/sh
+set -e
+
+echo "[embed-preseed] locating installer initrd..."
+INITRD=$(find binary -path '*install*' -name 'initrd.gz' -type f | head -n1)
+if [ -z "$INITRD" ]; then
+    echo "[embed-preseed] ERROR: installer initrd not found under binary/"
+    echo "[embed-preseed] available initrd files:"
+    find binary -name 'initrd*' -type f
+    exit 1
+fi
+echo "[embed-preseed] found $INITRD"
+
+if [ ! -f config/includes.binary/preseed.cfg ]; then
+    echo "[embed-preseed] ERROR: preseed.cfg missing from config/includes.binary/"
+    exit 1
+fi
+
+WORK=$(mktemp -d)
+cp config/includes.binary/preseed.cfg "$WORK/preseed.cfg"
+gunzip -c "$INITRD" > "$WORK/initrd-raw"
+( cd "$WORK" && echo preseed.cfg | cpio -o -H newc -A -F initrd-raw 2>/dev/null )
+gzip -9 < "$WORK/initrd-raw" > "$INITRD"
+rm -rf "$WORK"
+
+echo "[embed-preseed] success — initrd now $(wc -c < $INITRD) bytes"
+EOF
+chmod +x config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
 
 cat <<'EOF' > config/hooks/normal/0900-create-kiosk-user.hook.chroot
 #!/bin/sh
