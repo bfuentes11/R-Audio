@@ -59,9 +59,16 @@ lb config \
   --mirror-binary "http://deb.debian.org/debian/" \
   --mirror-binary-security "http://security.debian.org/debian-security/"
 
-# 3. Configure packages to be pre-installed inside the Chroot
-echo "Configuring pre-installed packages list..."
-cat <<EOF > config/package-lists/kiosk.list.chroot
+# 3. Configure packages to be bundled into the ISO's local apt pool.
+#
+# Note .binary (NOT .chroot) — this tells live-build to download the
+# packages and place them in the ISO's pool (binary/pool/...) rather than
+# install them into the live chroot. d-i is then preseeded to use the CD
+# as its only apt source, so the entire install runs offline. After the
+# kiosk boots from internal disk, the r-audio-setup OOBE pairs Wi-Fi and
+# any future `apt update` goes over the network normally.
+echo "Configuring offline-install package pool..."
+cat <<EOF > config/package-lists/kiosk.list.binary
 # Display Server & barebones WM
 xserver-xorg
 xinit
@@ -88,7 +95,6 @@ ca-certificates
 curl
 wget
 sudo
-debootstrap
 
 # Surface Go 2 hardware firmware (Wi-Fi, touchscreen)
 firmware-misc-nonfree
