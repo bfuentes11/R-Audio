@@ -162,36 +162,50 @@ chmod 440 "$INCLUDES/etc/sudoers.d/kiosk"
 # 7. Post-configuration setup (create kiosk user during image creation)
 mkdir -p config/hooks/normal
 
-# Binary-stage hook: patch both bootloaders to boot the live system immediately.
-# Runs after live-build generates the configs, before the ISO is assembled.
-# The Surface Go 2 boots via UEFI (grub), but we patch both paths for completeness.
-cat <<'EOF' > config/hooks/normal/0100-autoboot.hook.binary
+# Binary-stage hook: patch every bootloader config in the tree to auto-boot.
+# Runs late (9999-) so it executes after any live-build / d-i hooks that might
+# regenerate these files. Diagnostic output is printed so we can confirm in CI logs.
+cat <<'EOF' > config/hooks/normal/9999-autoboot.hook.binary
 #!/bin/sh
 set -e
 
-# UEFI / grub — boot immediately with no menu visible
-for cfg in binary/boot/grub/grub.cfg binary/EFI/boot/grub.cfg binary/EFI/debian/grub.cfg; do
-    if [ -f "$cfg" ]; then
-        sed -i 's/^set timeout=.*/set timeout=0/'                  "$cfg" || true
-        sed -i 's/^set timeout_style=.*/set timeout_style=hidden/' "$cfg" || true
-        # Inject the settings if the lines weren't present at all
-        grep -q '^set timeout='       "$cfg" || sed -i '1i set timeout=0'              "$cfg"
-        grep -q '^set timeout_style=' "$cfg" || sed -i '1i set timeout_style=hidden'   "$cfg"
+echo "=========================================="
+echo "AUTOBOOT HOOK: forcing immediate boot"
+echo "=========================================="
+
+# --- GRUB (UEFI — Surface Go 2 path) -------------------------------------
+# Find every grub.cfg in the binary tree and force timeout=0 + hidden menu.
+# Any pre-existing timeout/timeout_style/default lines are stripped first,
+# then known-good values are injected at the very top.
+find binary -type f -name "grub.cfg" 2>/dev/null | while read -r cfg; do
+    echo "  [grub]    $cfg"
+    sed -i -e '/^[[:space:]]*set[[:space:]]\+timeout[[:space:]]*=/d' \
+           -e '/^[[:space:]]*set[[:space:]]\+timeout_style[[:space:]]*=/d' \
+           -e '/^[[:space:]]*set[[:space:]]\+default[[:space:]]*=/d' \
+           "$cfg"
+    # Prepend a single block at the very top so it can't be overridden later
+    { printf 'set default=0\nset timeout=0\nset timeout_style=hidden\n'; cat "$cfg"; } > "$cfg.new"
+    mv "$cfg.new" "$cfg"
+done
+
+# --- ISOLINUX / SYSLINUX (legacy BIOS path) ------------------------------
+find binary \( -name "isolinux.cfg" -o -name "syslinux.cfg" -o -name "live.cfg" -o -name "menu.cfg" -o -name "stdmenu.cfg" \) -type f 2>/dev/null | while read -r cfg; do
+    echo "  [syslinux] $cfg"
+    if grep -qi '^[[:space:]]*timeout' "$cfg"; then
+        sed -i 's/^[[:space:]]*[Tt][Ii][Mm][Ee][Oo][Uu][Tt].*/TIMEOUT 1/' "$cfg"
+    else
+        echo 'TIMEOUT 1' >> "$cfg"
+    fi
+    if grep -qi '^[[:space:]]*prompt' "$cfg"; then
+        sed -i 's/^[[:space:]]*[Pp][Rr][Oo][Mm][Pp][Tt].*/PROMPT 0/' "$cfg"
     fi
 done
 
-# BIOS / isolinux/syslinux — TIMEOUT is in 1/10 second units; 1 = 100ms
-for cfg in binary/isolinux/isolinux.cfg binary/isolinux/live.cfg binary/syslinux/syslinux.cfg; do
-    if [ -f "$cfg" ]; then
-        if grep -qi '^timeout' "$cfg"; then
-            sed -i 's/^[Tt][Ii][Mm][Ee][Oo][Uu][Tt].*/TIMEOUT 1/' "$cfg"
-        else
-            echo 'TIMEOUT 1' >> "$cfg"
-        fi
-    fi
-done
+echo "=========================================="
+echo "AUTOBOOT HOOK: complete"
+echo "=========================================="
 EOF
-chmod +x config/hooks/normal/0100-autoboot.hook.binary
+chmod +x config/hooks/normal/9999-autoboot.hook.binary
 
 cat <<'EOF' > config/hooks/normal/0900-create-kiosk-user.hook.chroot
 #!/bin/sh
