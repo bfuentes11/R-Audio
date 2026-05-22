@@ -8,6 +8,27 @@ The target system boots in **under 10 seconds** directly into the glassmorphic p
 
 ## Technical Flow Chart
 
+### First Boot — Unattended Install (one-time, from USB)
+```
+[Boot USB] ──► [GRUB picks unattended entry (timeout 0, hidden)]
+       │
+       ▼
+[Debian Installer reads /cdrom/preseed.cfg]
+       │
+       ▼
+[Auto-detects first disk (eMMC on Surface Go 2) ──► WIPES + partitions]
+       │
+       ▼
+[Installs base Debian + kiosk packages from deb.debian.org]
+       │
+       ▼
+[late_command runs postinstall.sh ──► copies R-Audio + autologin override]
+       │
+       ▼
+[d-i ejects USB and reboots into installed system]
+```
+
+### Every Boot After — Kiosk Startup (from internal disk)
 ```
 [System Power On] 
        │
@@ -31,8 +52,11 @@ The target system boots in **under 10 seconds** directly into the glassmorphic p
 ## Directory Structure
 
 * [build-iso.sh](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/build-iso.sh) - Automated live-build shell script wrapper.
+* [preseed.cfg](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/preseed.cfg) - Debian Installer answer file for unattended install to internal disk.
+* [postinstall.sh](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/postinstall.sh) - Runs from preseed's `late_command`; installs R-Audio binaries + autologin into the freshly installed target.
 * [r-audio.service](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/r-audio.service) - systemd unit file that handles process monitoring and restarts.
 * [r-audio.env.template](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/r-audio.env.template) - Template for credentials and system keys (maps to `/etc/default/r-audio`).
+* [r-audio-launcher.sh](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/r-audio-launcher.sh) - X11 startup orchestrator that retries network before launching the player.
 * [xinitrc](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/xinitrc) - Direct bare-metal X11 startup orchestrator.
 
 ---
@@ -86,6 +110,11 @@ Upon completion, you will find a hybrid, bootable ISO file:
 
 ## Flashing & Booting the Kiosk OS
 
+> ⚠️ **This ISO is an unattended installer, not a Live USB.** Booting it on a real machine
+> will **wipe the first detected disk** and install Debian + R-Audio on it. No confirmation
+> prompt — that's the whole point of the preseed. Use QEMU (below) for any test where you
+> don't want to lose data.
+
 ### Flashing to a USB Drive
 You can flash this ISO to a USB flash drive using standard tools:
 * **Windows**: Use [Rufus](https://rufus.ie/) (select "DD Image" mode if prompted) or [Ventoy](https://www.ventoy.net/).
@@ -95,12 +124,45 @@ You can flash this ISO to a USB flash drive using standard tools:
   ```
   *(Replace `/dev/sdX` with the path to your USB drive).*
 
+### Surface Go 2 — One-time UEFI Setup
+Before first boot from the kiosk USB, enter Surface UEFI (hold **Vol+** while pressing **Power**):
+1. **Secure Boot** → Disabled (simplest path; shim *should* work but Surface UEFI is finicky)
+2. **Boot order** → Move USB Storage above Windows Boot Manager
+3. After install, `force-efi-extra-removable=true` (set in [preseed.cfg](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/preseed.cfg)) writes a fallback at `/EFI/BOOT/BOOTX64.EFI` that the Surface firmware will always find — no further UEFI tweaks needed after the first install.
+
+> 💡 **Networking during install:** d-i has to reach `deb.debian.org` to fetch packages.
+> The kiosk's own Wi-Fi OOBE flow doesn't run until *after* install. Easiest path:
+> plug a USB-C dock with Ethernet into the Surface for the first install only.
+> After that, the kiosk handles Wi-Fi pairing itself.
+
 ### Local VM Testing (QEMU)
-To test the boot sequence and graphics compatibility directly on your development machine, use **QEMU**:
+Test the full unattended install + first kiosk boot **without flashing real hardware**.
+
+**Step 1 — Create an empty virtual disk** (one-time):
 ```bash
-sudo apt install qemu-system-x86
-qemu-system-x86_64 -enable-kvm -m 2G -cdrom live-image-amd64.hybrid.iso
+qemu-img create -f qcow2 fake.qcow2 16G
 ```
+This is the "fake eMMC" that the installer will wipe. qcow2 is sparse — the file only grows as data is written.
+
+**Step 2 — Run the unattended install:**
+```bash
+sudo apt install qemu-system-x86 ovmf
+qemu-system-x86_64 -enable-kvm -m 2G \
+    -bios /usr/share/ovmf/OVMF.fd \
+    -drive file=fake.qcow2,format=qcow2 \
+    -cdrom live-image-amd64.hybrid.iso
+```
+The installer runs through unattended (no prompts). When it finishes, close the QEMU window. `-bios OVMF.fd` boots QEMU in UEFI mode to exercise the same code path as the Surface (without it, you'd test the legacy BIOS / isolinux path instead).
+
+**Step 3 — Boot just the installed disk** (no `-cdrom`):
+```bash
+qemu-system-x86_64 -enable-kvm -m 2G \
+    -bios /usr/share/ovmf/OVMF.fd \
+    -drive file=fake.qcow2,format=qcow2
+```
+You should see GRUB → kernel → systemd → getty autologin → startx → R-Audio. If anything breaks in that chain, you'll catch it here.
+
+To start over from scratch: `rm fake.qcow2 && qemu-img create -f qcow2 fake.qcow2 16G`.
 
 ---
 

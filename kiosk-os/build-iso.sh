@@ -41,12 +41,15 @@ mkdir -p "$IMAGE_DIR"
 cd "$IMAGE_DIR"
 
 echo "Bootstrapping Live-Build configuration..."
+# --debian-installer true (was: live) → ship the standard text-mode d-i,
+# which honors preseed cleanly. The "live" installer is calamares-style and
+# does not respect d-i preseed answers the same way.
 lb config \
   --binary-images iso-hybrid \
   --architectures amd64 \
   --distribution "$DEBIAN_VERSION" \
   --archive-areas "main contrib non-free non-free-firmware" \
-  --debian-installer live \
+  --debian-installer true \
   --debian-installer-gui false \
   --memtest none \
   --linux-flavours amd64 \
@@ -159,53 +162,95 @@ mkdir -p "$INCLUDES/etc/sudoers.d"
 echo "kiosk ALL=(ALL) NOPASSWD: ALL" > "$INCLUDES/etc/sudoers.d/kiosk"
 chmod 440 "$INCLUDES/etc/sudoers.d/kiosk"
 
-# 7. Post-configuration setup (create kiosk user during image creation)
+# 7. Unattended-install payload: drop preseed + R-Audio binaries onto the
+#    ISO root so the Debian Installer can read them at /cdrom/... and the
+#    preseed late_command can copy them into the freshly installed system.
+echo "Staging unattended-install preseed and R-Audio payload..."
+BIN_INCLUDES="config/includes.binary"
+PAYLOAD_DIR="$BIN_INCLUDES/r-audio-payload"
+mkdir -p "$PAYLOAD_DIR"
+
+# preseed.cfg goes at the ISO root → /cdrom/preseed.cfg from the installer's view
+cp ../preseed.cfg "$BIN_INCLUDES/preseed.cfg"
+
+# Everything the post-install script needs to wire up the installed system
+cp "../$BINARY_PATH"        "$PAYLOAD_DIR/r-audio"
+cp "../$SETUP_BINARY_PATH"  "$PAYLOAD_DIR/r-audio-setup"
+cp ../r-audio-launcher.sh   "$PAYLOAD_DIR/r-audio-launcher"
+cp ../r-audio.service       "$PAYLOAD_DIR/r-audio.service"
+cp ../r-audio.env.template  "$PAYLOAD_DIR/r-audio.env"
+cp ../xinitrc               "$PAYLOAD_DIR/xinitrc"
+cp ../postinstall.sh        "$PAYLOAD_DIR/postinstall.sh"
+chmod +x "$PAYLOAD_DIR/r-audio" \
+         "$PAYLOAD_DIR/r-audio-setup" \
+         "$PAYLOAD_DIR/r-audio-launcher" \
+         "$PAYLOAD_DIR/postinstall.sh"
+
+# 8. Bootloader overrides — replace live-build's templates with a self-contained
+#    config whose default entry is the unattended installer (timeout 0, hidden).
+#    Live mode and a manual installer entry are kept as menu fallbacks.
+#    Drop into BOTH grub-pc (legacy BIOS) and grub-efi (UEFI — Surface Go 2 path).
+echo "Writing bootloader overrides (default = unattended installer)..."
+mkdir -p config/bootloaders/grub-pc config/bootloaders/grub-efi config/bootloaders/isolinux
+
+GRUB_CFG='# R-Audio Kiosk GRUB config — overrides live-build template.
+# Default entry is the unattended installer; menu is hidden with timeout 0.
+# Hold Esc/Shift during boot to interrupt and pick a different entry.
+
+if loadfont $prefix/font.pf2 ; then
+    set gfxmode=auto
+    insmod all_video
+    insmod gfxterm
+    terminal_output gfxterm
+fi
+
+set default=0
+set timeout=0
+set timeout_style=hidden
+
+menuentry "R-Audio Kiosk — Auto-Install (WIPES DISK)" {
+    linux  /install.amd/vmlinuz auto=true priority=critical preseed/file=/cdrom/preseed.cfg --- quiet
+    initrd /install.amd/initrd.gz
+}
+
+menuentry "Live system (debug fallback)" {
+    linux  /live/vmlinuz boot=live components quiet splash
+    initrd /live/initrd.img
+}
+
+menuentry "Manual install (interactive)" {
+    linux  /install.amd/vmlinuz --- quiet
+    initrd /install.amd/initrd.gz
+}
+'
+printf '%s' "$GRUB_CFG" > config/bootloaders/grub-pc/grub.cfg
+printf '%s' "$GRUB_CFG" > config/bootloaders/grub-efi/grub.cfg
+
+# Legacy BIOS path — Surface Go 2 boots UEFI, but include this so the ISO
+# is also bootable on plain BIOS hardware for development.
+cat <<'ISOCFG' > config/bootloaders/isolinux/isolinux.cfg
+default unattended
+prompt 0
+timeout 1
+
+label unattended
+    linux  /install.amd/vmlinuz
+    initrd /install.amd/initrd.gz
+    append vga=788 auto=true priority=critical preseed/file=/cdrom/preseed.cfg --- quiet
+
+label live
+    linux  /live/vmlinuz
+    initrd /live/initrd.img
+    append boot=live components quiet splash
+
+label install
+    linux  /install.amd/vmlinuz
+    initrd /install.amd/initrd.gz
+    append vga=788 --- quiet
+ISOCFG
+
+# 9. Post-configuration setup (create kiosk user during image creation)
 mkdir -p config/hooks/normal
-
-# Binary-stage hook: patch every bootloader config in the tree to auto-boot.
-# Runs late (9999-) so it executes after any live-build / d-i hooks that might
-# regenerate these files. Diagnostic output is printed so we can confirm in CI logs.
-cat <<'EOF' > config/hooks/normal/9999-autoboot.hook.binary
-#!/bin/sh
-set -e
-
-echo "=========================================="
-echo "AUTOBOOT HOOK: forcing immediate boot"
-echo "=========================================="
-
-# --- GRUB (UEFI — Surface Go 2 path) -------------------------------------
-# Find every grub.cfg in the binary tree and force timeout=0 + hidden menu.
-# Any pre-existing timeout/timeout_style/default lines are stripped first,
-# then known-good values are injected at the very top.
-find binary -type f -name "grub.cfg" 2>/dev/null | while read -r cfg; do
-    echo "  [grub]    $cfg"
-    sed -i -e '/^[[:space:]]*set[[:space:]]\+timeout[[:space:]]*=/d' \
-           -e '/^[[:space:]]*set[[:space:]]\+timeout_style[[:space:]]*=/d' \
-           -e '/^[[:space:]]*set[[:space:]]\+default[[:space:]]*=/d' \
-           "$cfg"
-    # Prepend a single block at the very top so it can't be overridden later
-    { printf 'set default=0\nset timeout=0\nset timeout_style=hidden\n'; cat "$cfg"; } > "$cfg.new"
-    mv "$cfg.new" "$cfg"
-done
-
-# --- ISOLINUX / SYSLINUX (legacy BIOS path) ------------------------------
-find binary \( -name "isolinux.cfg" -o -name "syslinux.cfg" -o -name "live.cfg" -o -name "menu.cfg" -o -name "stdmenu.cfg" \) -type f 2>/dev/null | while read -r cfg; do
-    echo "  [syslinux] $cfg"
-    if grep -qi '^[[:space:]]*timeout' "$cfg"; then
-        sed -i 's/^[[:space:]]*[Tt][Ii][Mm][Ee][Oo][Uu][Tt].*/TIMEOUT 1/' "$cfg"
-    else
-        echo 'TIMEOUT 1' >> "$cfg"
-    fi
-    if grep -qi '^[[:space:]]*prompt' "$cfg"; then
-        sed -i 's/^[[:space:]]*[Pp][Rr][Oo][Mm][Pp][Tt].*/PROMPT 0/' "$cfg"
-    fi
-done
-
-echo "=========================================="
-echo "AUTOBOOT HOOK: complete"
-echo "=========================================="
-EOF
-chmod +x config/hooks/normal/9999-autoboot.hook.binary
 
 cat <<'EOF' > config/hooks/normal/0900-create-kiosk-user.hook.chroot
 #!/bin/sh
@@ -227,7 +272,7 @@ systemctl enable NetworkManager
 EOF
 chmod +x config/hooks/normal/0900-create-kiosk-user.hook.chroot
 
-# 8. Compile the ISO
+# 10. Compile the ISO
 echo "Compiling the bootable hybrid Kiosk ISO..."
 lb build
 
