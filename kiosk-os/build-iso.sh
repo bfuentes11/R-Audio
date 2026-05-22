@@ -189,13 +189,26 @@ chmod +x "$PAYLOAD_DIR/r-audio" \
 # 8. Bootloader overrides — replace live-build's templates with a self-contained
 #    config whose default entry is the unattended installer (timeout 0, hidden).
 #    Live mode and a manual installer entry are kept as menu fallbacks.
-#    Drop into BOTH grub-pc (legacy BIOS) and grub-efi (UEFI — Surface Go 2 path).
+#
+#    IMPORTANT: live-build's binary_grub_cfg / binary_syslinux steps do sed
+#    substitution on these files, replacing @KERNEL_DI@ / @INITRD_DI@ /
+#    @KERNEL_LIVE@ / @INITRD_LIVE@ / @APPEND_INSTALL@ / @APPEND_LIVE@ with
+#    the real on-ISO paths and args. Use the placeholders — hardcoding paths
+#    like /install.amd/vmlinuz breaks because current live-build emits
+#    /install/vmlinuz instead.
+#
+#    `grub-pc` controls BOTH the BIOS GRUB menu and the UEFI menu — the
+#    EFI grub.cfg inside efi.img is a tiny stub that just redirects to
+#    /boot/grub/grub.cfg (which is generated from this directory).
 echo "Writing bootloader overrides (default = unattended installer)..."
-mkdir -p config/bootloaders/grub-pc config/bootloaders/grub-efi config/bootloaders/isolinux
+mkdir -p config/bootloaders/grub-pc config/bootloaders/isolinux
 
-GRUB_CFG='# R-Audio Kiosk GRUB config — overrides live-build template.
+cat <<'GRUBCFG' > config/bootloaders/grub-pc/grub.cfg
+# R-Audio Kiosk GRUB config — overrides live-build template.
 # Default entry is the unattended installer; menu is hidden with timeout 0.
 # Hold Esc/Shift during boot to interrupt and pick a different entry.
+# @KERNEL_*@ / @INITRD_*@ / @APPEND_*@ are replaced at build time by
+# live-build's binary_grub_cfg step with real ISO paths and args.
 
 if loadfont $prefix/font.pf2 ; then
     set gfxmode=auto
@@ -208,45 +221,44 @@ set default=0
 set timeout=0
 set timeout_style=hidden
 
-menuentry "R-Audio Kiosk — Auto-Install (WIPES DISK)" {
-    linux  /install.amd/vmlinuz auto=true priority=critical preseed/file=/cdrom/preseed.cfg --- quiet
-    initrd /install.amd/initrd.gz
+menuentry "R-Audio Kiosk - Auto-Install (WIPES DISK)" {
+    linux   @KERNEL_DI@ auto=true priority=critical preseed/file=/cdrom/preseed.cfg vga=788 @APPEND_INSTALL@ --- quiet
+    initrd  @INITRD_DI@
 }
 
 menuentry "Live system (debug fallback)" {
-    linux  /live/vmlinuz boot=live components quiet splash
-    initrd /live/initrd.img
+    linux   @KERNEL_LIVE@ boot=live components @APPEND_LIVE@ quiet splash
+    initrd  @INITRD_LIVE@
 }
 
 menuentry "Manual install (interactive)" {
-    linux  /install.amd/vmlinuz --- quiet
-    initrd /install.amd/initrd.gz
+    linux   @KERNEL_DI@ vga=788 @APPEND_INSTALL@ --- quiet
+    initrd  @INITRD_DI@
 }
-'
-printf '%s' "$GRUB_CFG" > config/bootloaders/grub-pc/grub.cfg
-printf '%s' "$GRUB_CFG" > config/bootloaders/grub-efi/grub.cfg
+GRUBCFG
 
 # Legacy BIOS path — Surface Go 2 boots UEFI, but include this so the ISO
-# is also bootable on plain BIOS hardware for development.
+# is also bootable on plain BIOS hardware for development. Same @VAR@
+# placeholders apply; binary_syslinux does the substitution.
 cat <<'ISOCFG' > config/bootloaders/isolinux/isolinux.cfg
 default unattended
 prompt 0
 timeout 1
 
 label unattended
-    linux  /install.amd/vmlinuz
-    initrd /install.amd/initrd.gz
-    append vga=788 auto=true priority=critical preseed/file=/cdrom/preseed.cfg --- quiet
+    linux  @KERNEL_DI@
+    initrd @INITRD_DI@
+    append vga=788 auto=true priority=critical preseed/file=/cdrom/preseed.cfg @APPEND_INSTALL@ --- quiet
 
 label live
-    linux  /live/vmlinuz
-    initrd /live/initrd.img
-    append boot=live components quiet splash
+    linux  @KERNEL_LIVE@
+    initrd @INITRD_LIVE@
+    append boot=live components @APPEND_LIVE@ quiet splash
 
 label install
-    linux  /install.amd/vmlinuz
-    initrd /install.amd/initrd.gz
-    append vga=788 --- quiet
+    linux  @KERNEL_DI@
+    initrd @INITRD_DI@
+    append vga=788 @APPEND_INSTALL@ --- quiet
 ISOCFG
 
 # 9. Post-configuration setup (create kiosk user during image creation)
