@@ -49,8 +49,7 @@ lb config \
   --debian-installer live \
   --debian-installer-gui false \
   --memtest none \
-  --keyring-packages "debian-archive-keyring" \
-  --parent-mirror-bootstrap "http://deb.debian.org/debian/" \
+  --linux-flavours amd64 \
   --mirror-bootstrap "http://deb.debian.org/debian/" \
   --mirror-chroot "http://deb.debian.org/debian/" \
   --mirror-chroot-security "http://security.debian.org/debian-security/" \

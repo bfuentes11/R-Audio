@@ -33,7 +33,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # ── 3. System build dependencies ───────────────────────────────────────
+      # ── 3. System build dependencies (Rust only — no live-build on host) ──
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -43,10 +43,7 @@ jobs:
             libssl-dev \
             pkg-config \
             libdbus-1-dev \
-            libfontconfig1-dev \
-            live-build \
-            xorriso \
-            squashfs-tools
+            libfontconfig1-dev
 
       # ── 4. Compile R-Audio binaries for Linux x86_64 ──────────────────────
       - name: Build release binaries
@@ -54,14 +51,20 @@ jobs:
           cargo build --release --target x86_64-unknown-linux-gnu
           # Stage where build-iso.sh expects them
           mkdir -p target/release
-          cp target/x86_64-unknown-linux-gnu/release/R-Audio    target/release/R-Audio
+          cp target/x86_64-unknown-linux-gnu/release/R-Audio       target/release/R-Audio
           cp target/x86_64-unknown-linux-gnu/release/r-audio-setup target/release/r-audio-setup
 
-      # ── 5. Build the Debian Kiosk ISO ─────────────────────────────────────
+      # ── 5. Build the Debian Kiosk ISO inside a Debian Bookworm container ──
+      # Running live-build on an Ubuntu host bleeds Ubuntu-specific defaults
+      # (mirrors, keyrings, kernel package names) into the Debian chroot.
+      # Using a native Debian container eliminates all of that at once.
       - name: Build Kiosk ISO
         run: |
-          cd kiosk-os
-          sudo bash build-iso.sh
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}:/build" \
+            -w /build/kiosk-os \
+            debian:bookworm \
+            bash build-iso.sh
         timeout-minutes: 90   # live-build debootstraps a full Debian; give it time
 
       # ── 6. Upload ISO as a downloadable artifact ───────────────────────────
