@@ -50,6 +50,7 @@ lb config \
   --debian-installer-gui false \
   --memtest none \
   --linux-flavours amd64 \
+  --syslinux-timeout 1 \
   --mirror-bootstrap "http://deb.debian.org/debian/" \
   --mirror-chroot "http://deb.debian.org/debian/" \
   --mirror-chroot-security "http://security.debian.org/debian-security/" \
@@ -161,6 +162,22 @@ chmod 440 "$INCLUDES/etc/sudoers.d/kiosk"
 
 # 7. Post-configuration setup (create kiosk user during image creation)
 mkdir -p config/hooks/normal
+
+# Binary-stage hook: patch grub to boot the live system immediately with no menu.
+# Runs after live-build generates the EFI/grub configs, before the ISO is assembled.
+# Covers both the BIOS path (isolinux) via --syslinux-timeout above and the
+# UEFI path (grub) here — the Surface Go 2 boots via UEFI.
+cat <<'EOF' > config/hooks/normal/0100-autoboot.hook.binary
+#!/bin/sh
+for cfg in binary/boot/grub/grub.cfg binary/EFI/boot/grub.cfg; do
+    [ -f "$cfg" ] || continue
+    # Boot immediately — no countdown, no menu
+    sed -i 's/set timeout=.*/set timeout=0/'       "$cfg"
+    sed -i 's/set timeout_style=.*/set timeout_style=hidden/' "$cfg"
+done
+EOF
+chmod +x config/hooks/normal/0100-autoboot.hook.binary
+
 cat <<'EOF' > config/hooks/normal/0900-create-kiosk-user.hook.chroot
 #!/bin/sh
 # Add the dedicated kiosk user and assign proper sound/video groups
