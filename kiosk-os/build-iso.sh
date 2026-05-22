@@ -103,6 +103,9 @@ firmware-iwlwifi
 # Bluetooth support
 bluez
 bluez-tools
+
+# X11 utilities (xset — needed by .xinitrc to disable screensaver/DPMS)
+x11-xserver-utils
 EOF
 
 # 4. Inject Kiosk OS files directly into the target filesystem
