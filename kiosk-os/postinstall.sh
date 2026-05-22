@@ -66,6 +66,16 @@ in-target chown -R kiosk:kiosk /home/kiosk
 echo "[postinstall] Selecting multi-user.target (kiosk uses getty->startx, no DM)..."
 in-target systemctl set-default multi-user.target
 
+echo "[postinstall] Writing /etc/apt/sources.list..."
+# The 50mirror apt-setup generator was disabled during install to prevent a
+# blocking "bad archive mirror" dialog (no network during d-i). Write the
+# sources.list manually here so apt works normally once Wi-Fi is paired.
+cat > /target/etc/apt/sources.list <<'EOF'
+deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+EOF
+
 echo "[postinstall] Enabling network and mDNS services..."
 in-target systemctl enable avahi-daemon
 in-target systemctl enable NetworkManager
