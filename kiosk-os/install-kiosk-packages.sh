@@ -19,15 +19,25 @@ echo "[r-audio-install] Updating package lists..."
 apt-get update -qq
 
 echo "[r-audio-install] Installing kiosk packages..."
+# Anything that isn't on the Debian trixie DVD1 GNOME pool — installed here
+# now that the kiosk has network access.
+#
+# Grouped by purpose:
+#   - Window manager + on-screen keyboard (UI)
+#   - Audio playback (pulseaudio + Bonjour-compat lib for librespot)
+#   - Bluetooth tools (manual pairing + diagnostics)
+#   - Wi-Fi diagnostics (iw, rfkill) — useful for future debugging
+#   - Plymouth (graphical boot splash)
+#   - xserver-xorg-legacy (setuid wrapper so kiosk user can start X)
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
     openbox \
+    onboard \
     pulseaudio \
     libavahi-compat-libdnssd1 \
-    bluez-tools \
-    onboard \
-    xserver-xorg-legacy \
-    plymouth \
-    plymouth-themes
+    bluez bluez-tools \
+    iw rfkill \
+    plymouth plymouth-themes \
+    xserver-xorg-legacy
 
 # ── Plymouth: enable graphical boot splash with the R-Audio theme ──────────
 echo "[r-audio-install] Activating R-Audio Plymouth boot splash..."

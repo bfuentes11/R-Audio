@@ -1,176 +1,215 @@
 # R-Audio Debian Kiosk OS Build Guide
 
-This directory contains the configurations and scripts required to package the `R-Audio` player into a standalone, custom, bootable Debian-based **Kiosk OS ISO** (`.iso`).
+Bootable Debian **trixie** (13) ISO that turns a Surface Go 2 (or any x86_64 UEFI machine) into a dedicated R-Audio kiosk. Boots in under 10 seconds straight into a fullscreen Slint UI — no GNOME, no desktop environment, just bare X11 + openbox + the player.
 
-The target system boots in **under 10 seconds** directly into the glassmorphic player without heavy Desktop Environments (like GNOME or KDE), using bare X.org and a lightweight window manager (`openbox`).
+The ISO is built by **remastering the official Debian DVD1** (xorriso graft of our preseed + payload). No live-build, no Docker for the build itself, no initrd patching. The d-i install runs fully offline from the DVD pool; anything not on DVD1 is installed after Wi-Fi connects on first boot.
 
 ---
 
-## Technical Flow Chart
+## Boot Flow
 
-### First Boot — Unattended Install (one-time, from USB)
+### First boot ever (from USB)
 ```
-[Boot USB] ──► [GRUB picks unattended entry (timeout 0, hidden)]
-       │
-       ▼
-[Debian Installer reads /cdrom/preseed.cfg]
-       │
-       ▼
+[GRUB picks unattended entry, timeout 0, hidden]
+     │
+     ▼
+[d-i reads /cdrom/preseed.cfg ──► fully unattended install]
+     │
+     ▼
 [Auto-detects first disk (eMMC on Surface Go 2) ──► WIPES + partitions]
-       │
-       ▼
-[Installs base Debian + kiosk packages from deb.debian.org]
-       │
-       ▼
-[late_command runs postinstall.sh ──► copies R-Audio + autologin override]
-       │
-       ▼
-[d-i ejects USB and reboots into installed system]
+     │
+     ▼
+[Installs minimal Debian + base kiosk deps from the DVD pool only — NO network]
+     │
+     ▼
+[late_command → postinstall.sh: copies r-audio binaries, autologin, sudoers,
+                                stages Plymouth theme files for later]
+     │
+     ▼
+[d-i ejects USB, reboots into installed system]
 ```
 
-### Every Boot After — Kiosk Startup (from internal disk)
+### First boot from internal disk (one-time OOBE)
 ```
-[System Power On] 
-       │
-       ▼
-[systemd TTY1 Auto-Login] ──► logs in "kiosk" user
-       │
-       ▼
-[startx -- -nocursor] ────► initializes bare Xorg display server
-       │
-       ▼
-[~/.xinitrc] ─────────────► starts openbox & spawns r-audio fullscreen
-       │
-       ▼
-[R-Audio Boot Check] ─────► checks if Spotify cache exists
-       ├──► YES ──────────► dynamic token refresh ──► loads player dashboard
-       └──► NO ───────────► starts tiny-http (8888) ──► displays Pairing QR
+[autologin kiosk on tty1 → startx → r-audio launches in non-fullscreen]
+     │
+     ▼
+[r-audio detects first run → starts Wi-Fi hotspot "R-Audio-Setup"]
+     │
+     ▼
+[User scans QR, connects phone to hotspot, enters home Wi-Fi creds in web form]
+     │
+     ▼
+[r-audio connects to home Wi-Fi → runs /usr/local/bin/r-audio-install-packages
+                                    (apt-installs openbox, plymouth, pulseaudio,
+                                     onboard, bluez-tools, etc.)]
+     │
+     ▼
+[Spotify pairing QR flow → mark setup complete → REBOOT]
+```
+
+### Every boot after that
+```
+[Plymouth pulsing-Rust-logo splash → autologin → startx]
+     │
+     ▼
+[xinitrc starts openbox + onboard + r-audio fullscreen]
+     │
+     ▼
+[r-audio loads cached Spotify token, goes straight to player]
 ```
 
 ---
 
-## Directory Structure
+## Files in this directory
 
-* [build-iso.sh](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/build-iso.sh) - Automated live-build shell script wrapper.
-* [preseed.cfg](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/preseed.cfg) - Debian Installer answer file for unattended install to internal disk.
-* [postinstall.sh](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/postinstall.sh) - Runs from preseed's `late_command`; installs R-Audio binaries + autologin into the freshly installed target.
-* [r-audio.service](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/r-audio.service) - systemd unit file that handles process monitoring and restarts.
-* [r-audio.env.template](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/r-audio.env.template) - Template for credentials and system keys (maps to `/etc/default/r-audio`).
-* [r-audio-launcher.sh](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/r-audio-launcher.sh) - X11 startup orchestrator that retries network before launching the player.
-* [xinitrc](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/xinitrc) - Direct bare-metal X11 startup orchestrator.
-
----
-
-## Step-by-Step ISO Build Instructions
-
-### Prerequisites
-You must run the build script on a **Debian or Ubuntu host** (or within a VM). Sudo/root permissions are required because it runs kernel `chroot` commands to mount and package the root squash filesystem.
-
-> **Developing on Windows?** The ISO builder needs a Linux binary, so you must cross-compile first. The easiest path is WSL2:
-> ```bash
-> # In WSL2 (Ubuntu/Debian)
-> rustup target add x86_64-unknown-linux-gnu
-> sudo apt install gcc libasound2-dev libssl-dev pkg-config
-> cargo build --release --target x86_64-unknown-linux-gnu
-> # The binary lands at target/x86_64-unknown-linux-gnu/release/R-Audio
-> # Copy it to target/release/R-Audio before running the ISO builder
-> cp target/x86_64-unknown-linux-gnu/release/R-Audio target/release/R-Audio
-> cp target/x86_64-unknown-linux-gnu/release/r-audio-setup target/release/r-audio-setup
-> ```
-
-### Step 1: Compile the R-Audio Release Binary
-On a Linux host (or WSL2), compile the R-Audio application in release mode:
-```bash
-cargo build --release
-```
-This optimizes Slint rendering, turns off compiler diagnostics, and produces a highly efficient bare-metal binary inside `target/release/R-Audio`.
-
-### Step 2: Configure Environment Credentials
-Open [r-audio.env.template](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/r-audio.env.template) and input your credentials, including the `LASTFM_API_KEY` for recommendations:
-```bash
-LASTFM_API_KEY=your_lastfm_key_here
-```
-
-### Step 3: Run the ISO Compiler
-Navigate into the `kiosk-os/` folder on your build host and execute the script:
-```bash
-chmod +x build-iso.sh
-sudo ./build-iso.sh
-```
-This script will:
-1. Fetch and install building utilities (`live-build`, `xorriso`).
-2. Download a base minimal Debian Bookworm image.
-3. Install core kiosk libraries (Xorg, openbox, sound and network libraries).
-4. Inject `R-Audio`, set up systemd auto-login, and compile the final bootable ISO.
-
-Upon completion, you will find a hybrid, bootable ISO file:
-📁 **`live-image-amd64.hybrid.iso`**
+| File | Purpose |
+|---|---|
+| `build-iso.sh` | Downloads Debian DVD1 (or uses cache), runs xorriso to graft our payload onto it |
+| `preseed.cfg` | d-i answer file — fully unattended install with DVD-only package set |
+| `postinstall.sh` | Runs from preseed `late_command`; installs r-audio binaries, configures autologin, stages Plymouth theme |
+| `install-kiosk-packages.sh` | Apt-installs everything not on DVD1 — called by r-audio OOBE after Wi-Fi connects |
+| `xinitrc` | X11 startup — runs openbox + onboard + r-audio-launcher |
+| `r-audio-launcher.sh` | Pre-flight connectivity check, then exec's r-audio |
+| `r-audio.service` | systemd unit (manual dev use only; the autologin/startx chain is the kiosk path) |
+| `r-audio.env.template` | Env vars (Spotify keys, Last.fm key, Slint settings) — copied to `/etc/default/r-audio` |
+| `plymouth-theme/` | Source SVG + `.plymouth` + `.script` for the pulsing-Rust-logo boot splash |
 
 ---
 
-## Flashing & Booting the Kiosk OS
+## Package strategy: what goes where
 
-> ⚠️ **This ISO is an unattended installer, not a Live USB.** Booting it on a real machine
-> will **wipe the first detected disk** and install Debian + R-Audio on it. No confirmation
-> prompt — that's the whole point of the preseed. Use QEMU (below) for any test where you
-> don't want to lose data.
+**On the Debian DVD1 → installed by d-i during preseed install:**
+- `xserver-xorg`, `xinit`, `xserver-xorg-input-libinput`, `xauth`, `x11-xserver-utils`
+- `libgl1-mesa-dri`
+- `alsa-utils`
+- `avahi-daemon`, `dbus-x11`
+- `network-manager`, `wpasupplicant`
+- `ca-certificates`, `curl`, `wget`, `sudo`
+- `firmware-misc-nonfree`, `firmware-iwlwifi`
+- `fonts-dejavu-core`
 
-### Flashing to a USB Drive
-You can flash this ISO to a USB flash drive using standard tools:
-* **Windows**: Use [Rufus](https://rufus.ie/) (select "DD Image" mode if prompted) or [Ventoy](https://www.ventoy.net/).
-* **Linux / macOS**: Use `dd`:
-  ```bash
-  sudo dd if=live-image-amd64.hybrid.iso of=/dev/sdX bs=4M status=progress && sync
-  ```
-  *(Replace `/dev/sdX` with the path to your USB drive).*
+**Not on DVD1 → apt-installed by `install-kiosk-packages.sh` after first-boot Wi-Fi:**
+- `openbox` — window manager (GNOME's DVD uses mutter, not openbox)
+- `onboard` — touchscreen on-screen keyboard
+- `pulseaudio` — audio server (trixie's GNOME defaults to pipewire)
+- `libavahi-compat-libdnssd1` — Bonjour compat lib for librespot
+- `bluez`, `bluez-tools` — Bluetooth stack + diagnostics
+- `iw`, `rfkill` — Wi-Fi diagnostics
+- `plymouth`, `plymouth-themes` — graphical boot splash
+- `xserver-xorg-legacy` — setuid X wrapper so non-root kiosk user can start X
 
-### Surface Go 2 — One-time UEFI Setup
-Before first boot from the kiosk USB, enter Surface UEFI (hold **Vol+** while pressing **Power**):
-1. **Secure Boot** → Disabled (simplest path; shim *should* work but Surface UEFI is finicky)
-2. **Boot order** → Move USB Storage above Windows Boot Manager
-3. After install, `force-efi-extra-removable=true` (set in [preseed.cfg](file:///c:/Users/Bryan/OneDrive/Bryant%20Desktop/Documents/GitHub/R-Audio/kiosk-os/preseed.cfg)) writes a fallback at `/EFI/BOOT/BOOTX64.EFI` that the Surface firmware will always find — no further UEFI tweaks needed after the first install.
+**Rule:** if a package isn't in the GNOME-task dependency chain on DVD1, it goes in `install-kiosk-packages.sh`. Adding speculative packages to `preseed.cfg` breaks the "Select and install software" d-i step.
 
-> 💡 **Networking during install:** d-i has to reach `deb.debian.org` to fetch packages.
-> The kiosk's own Wi-Fi OOBE flow doesn't run until *after* install. Easiest path:
-> plug a USB-C dock with Ethernet into the Surface for the first install only.
-> After that, the kiosk handles Wi-Fi pairing itself.
+---
 
-### Local VM Testing (QEMU)
-Test the full unattended install + first kiosk boot **without flashing real hardware**.
+## Building the ISO
 
-**Step 1 — Create an empty virtual disk** (one-time):
+### Option 1 — GitHub Actions (recommended)
+
+The workflow at [.github/workflows/build-kiosk-iso.yml](../.github/workflows/build-kiosk-iso.yml) builds on `ubuntu-latest` (x86_64) on every push to `main` or `librespot-0.4.2`. After ~10 minutes it uploads a `r-audio-kiosk-iso` artifact you can download from the run page.
+
+This is the path most contributors should use. Pushing your changes is faster than maintaining a local cross-compile environment.
+
+### Option 2 — Native build on an x86_64 Linux host
+
+If you have an x86_64 Linux machine (NOT ARM — this won't work on Apple Silicon or Snapdragon WSL without cross-compilation):
+
 ```bash
-qemu-img create -f qcow2 fake.qcow2 16G
-```
-This is the "fake eMMC" that the installer will wipe. qcow2 is sparse — the file only grows as data is written.
+# Dependencies
+sudo apt-get install -y gcc libasound2-dev libssl-dev pkg-config \
+    libdbus-1-dev libfontconfig1-dev xorriso wget librsvg2-bin
 
-**Step 2 — Run the unattended install:**
+# Build binaries
+cargo build --release --target x86_64-unknown-linux-gnu
+mkdir -p target/release
+cp target/x86_64-unknown-linux-gnu/release/R-Audio       target/release/R-Audio
+cp target/x86_64-unknown-linux-gnu/release/r-audio-setup target/release/r-audio-setup
+
+# Build ISO
+cd kiosk-os
+sudo bash build-iso.sh
+# Output: r-audio-kiosk-trixie.iso
+```
+
+First run downloads the Debian DVD1 (~4.7 GB, one-time). Subsequent builds skip the download — total time ~2-3 minutes.
+
+---
+
+## Flashing
+
+> ⚠️ **This ISO is an unattended installer, not a Live USB.** Booting it on a real machine **wipes the first detected disk** with no confirmation.
+
+| OS | Tool |
+|---|---|
+| Windows | [Rufus](https://rufus.ie/) — select **DD Image mode** when prompted |
+| Linux/macOS | `sudo dd if=r-audio-kiosk-trixie.iso of=/dev/sdX bs=4M status=progress && sync` |
+
+### Surface Go 2 UEFI setup (one-time, before first install)
+
+Hold **Vol+** while pressing **Power** to enter UEFI.
+
+1. **Security → Secure Boot → Disabled**
+   The custom GRUB EFI binary isn't signed with Microsoft's key, so Surface firmware rejects it with Secure Boot on.
+2. **Boot order → USB Storage above Windows Boot Manager**
+3. Save & Exit. Plug in the USB and turn the device back on.
+
+The preseed sets `force-efi-extra-removable=true`, which installs a fallback bootloader at `/EFI/BOOT/BOOTX64.EFI` — Surface firmware will always find it, so no further UEFI tweaks needed after the install completes.
+
+---
+
+## Local VM testing (QEMU)
+
+Verify the unattended install without flashing real hardware:
+
 ```bash
 sudo apt install qemu-system-x86 ovmf
+
+# One-time: create empty 16 GB disk
+qemu-img create -f qcow2 fake.qcow2 16G
+
+# Run the install (UEFI mode = OVMF — matches Surface firmware)
 qemu-system-x86_64 -enable-kvm -m 2G \
     -bios /usr/share/ovmf/OVMF.fd \
     -drive file=fake.qcow2,format=qcow2 \
-    -cdrom live-image-amd64.hybrid.iso
-```
-The installer runs through unattended (no prompts). When it finishes, close the QEMU window. `-bios OVMF.fd` boots QEMU in UEFI mode to exercise the same code path as the Surface (without it, you'd test the legacy BIOS / isolinux path instead).
+    -cdrom kiosk-os/r-audio-kiosk-trixie.iso
 
-**Step 3 — Boot just the installed disk** (no `-cdrom`):
-```bash
+# After install, boot the installed disk alone (no -cdrom)
 qemu-system-x86_64 -enable-kvm -m 2G \
     -bios /usr/share/ovmf/OVMF.fd \
     -drive file=fake.qcow2,format=qcow2
 ```
-You should see GRUB → kernel → systemd → getty autologin → startx → R-Audio. If anything breaks in that chain, you'll catch it here.
 
-To start over from scratch: `rm fake.qcow2 && qemu-img create -f qcow2 fake.qcow2 16G`.
+To start over: `rm fake.qcow2 && qemu-img create -f qcow2 fake.qcow2 16G`.
 
 ---
 
-## Seamless Kiosk Pairing Workflow
+## Customization
 
-Once the Kiosk boots for the first time, it enters **Pairing Mode** automatically:
-1. The screen displays a gorgeous high-contrast **QR Code** and instructions pointing to `http://r-audio.local:8888`.
-2. Connect your phone or laptop to the **same Wi-Fi network** as the kiosk.
-3. Scan the QR code or type `http://r-audio.local:8888` in your browser.
-4. Log in to your Spotify account and authorize R-Audio.
-5. The pairing server will handle the token cache swap, save it to persistent storage, and transition the kiosk screen to the **Music Dashboard** instantly!
+### r-audio.env (Spotify / Last.fm credentials)
+
+`r-audio.env.template` is copied to `/etc/default/r-audio` on the installed system. Edit the template **before** building the ISO if you want custom keys baked in, or SSH into the kiosk and edit it post-install.
+
+```ini
+LASTFM_API_KEY=your_lastfm_key
+RSPOTIFY_CLIENT_ID=your_spotify_client_id
+RSPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+SLINT_FULLSCREEN=1
+SLINT_SCALE_FACTOR=2.0
+```
+
+### Plymouth theme
+
+The pulsing Rust logo lives at `plymouth-theme/`. Edit `r-audio.script` to tune the animation (`progress = progress + 0.04` controls speed; the `0.275 * Math.Sin(...)` term controls pulse depth). The SVG is rasterized to PNG at build time by `build-iso.sh` via `rsvg-convert`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| "Installation step failed — Select and install software" | A package in `preseed.cfg` pkgsel/include isn't on DVD1. Move it to `install-kiosk-packages.sh`. |
+| Boot loop: terminal flashes then black, repeats | startx crashing; the modified `.bash_profile` now pauses with the error log visible — read it from the screen. |
+| OOBE shows but hotspot isn't visible from phone | `oobe_start_hotspot()` will display the actual nmcli error on the kiosk screen. Common causes: rfkill block, adapter doesn't support AP mode, NetworkManager not ready. |
+| Secure Boot error on Surface | Disable Secure Boot in UEFI (see flashing section above). |
+| `sha384` error in GRUB at boot | Cosmetic GRUB warning. Non-fatal — boot continues. |
