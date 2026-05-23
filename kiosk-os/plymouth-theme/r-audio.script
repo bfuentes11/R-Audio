@@ -1,0 +1,40 @@
+// ============================================================================
+// R-Audio Plymouth boot splash — pulsing Rust logo
+// ============================================================================
+// Renders a white Rust logo centered on a solid black background. The logo
+// breathes via opacity oscillating between ~0.45 and 1.0 on a ~2-second
+// sin-wave period. Plymouth calls refresh_callback ~60 times per second.
+// ============================================================================
+
+// Solid black background.
+Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
+Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
+
+// Load the rendered white Rust logo (PNG, baked at build time from SVG).
+logo.image = Image("rust-logo.png");
+logo.sprite = Sprite(logo.image);
+
+// Center on the framebuffer.
+logo.x = Window.GetX() + Window.GetWidth() / 2 - logo.image.GetWidth() / 2;
+logo.y = Window.GetY() + Window.GetHeight() / 2 - logo.image.GetHeight() / 2;
+logo.sprite.SetPosition(logo.x, logo.y, 0);
+
+// ── Pulse animation ──────────────────────────────────────────────────────────
+// progress increments each frame; opacity = midpoint + amplitude * sin(rate)
+progress = 0;
+
+fun refresh_callback() {
+    progress = progress + 0.04;
+    // Midpoint 0.725, amplitude 0.275 → range [0.45, 1.0]
+    // Multiplier 2.5 → ~2.5s per pulse cycle at 60Hz refresh
+    opacity = 0.725 + 0.275 * Math.Sin(progress * 2.5);
+    logo.sprite.SetOpacity(opacity);
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+// Fade out cleanly when boot completes and Plymouth hands off to the display.
+fun quit_callback() {
+    logo.sprite.SetOpacity(0);
+}
+Plymouth.SetQuitFunction(quit_callback);

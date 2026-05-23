@@ -35,11 +35,44 @@ fn mark_setup_complete() {
     println!("[oobe] Setup complete flag written.");
 }
 
+/// Pre-flight: make sure NetworkManager has the radio on and an unmanaged
+/// device hasn't claimed the Wi-Fi adapter. Without this, `nmcli device wifi
+/// hotspot` silently no-ops on bare metal.
+fn oobe_prepare_wifi_radio() {
+    if !cfg!(target_os = "linux") { return; }
+    // Turn the radio on (no-op if already on).
+    let _ = std::process::Command::new("sudo")
+        .args(["nmcli", "radio", "wifi", "on"])
+        .status();
+}
+
 fn oobe_start_hotspot() {
     if cfg!(target_os = "linux") {
-        let _ = std::process::Command::new("nmcli")
-            .args(["device", "wifi", "hotspot", "ssid", "R-Audio-Setup"])
-            .spawn();
+        oobe_prepare_wifi_radio();
+        // NetworkManager requires WPA2; an open hotspot is rejected.
+        // Default password "raudio12" — phones expect 8+ chars.
+        let output = std::process::Command::new("sudo")
+            .args([
+                "nmcli", "device", "wifi", "hotspot",
+                "ssid", "R-Audio-Setup",
+                "password", "raudio12",
+            ])
+            .output();
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    eprintln!(
+                        "[oobe] nmcli hotspot failed (exit {:?}): {}{}",
+                        out.status.code(),
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr),
+                    );
+                } else {
+                    println!("[oobe] Hotspot 'R-Audio-Setup' started (password: raudio12).");
+                }
+            }
+            Err(e) => eprintln!("[oobe] Failed to invoke nmcli: {}", e),
+        }
     } else {
         println!("[oobe] Simulating hotspot start.");
     }
@@ -47,8 +80,8 @@ fn oobe_start_hotspot() {
 
 fn oobe_stop_hotspot() {
     if cfg!(target_os = "linux") {
-        let _ = std::process::Command::new("nmcli")
-            .args(["connection", "down", "Hotspot"])
+        let _ = std::process::Command::new("sudo")
+            .args(["nmcli", "connection", "down", "Hotspot"])
             .status();
     } else {
         println!("[oobe] Simulating hotspot stop.");
@@ -57,15 +90,31 @@ fn oobe_stop_hotspot() {
 
 fn oobe_connect_wifi(ssid: &str, password: &str) -> bool {
     if cfg!(target_os = "linux") {
-        let mut args = vec!["device", "wifi", "connect", ssid];
+        let mut args = vec!["nmcli", "device", "wifi", "connect", ssid];
         if !password.is_empty() {
             args.extend_from_slice(&["password", password]);
         }
-        std::process::Command::new("nmcli")
+        let output = std::process::Command::new("sudo")
             .args(&args)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .output();
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    eprintln!(
+                        "[oobe] nmcli connect failed: {}{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr),
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                eprintln!("[oobe] Failed to invoke nmcli connect: {}", e);
+                false
+            }
+        }
     } else {
         println!("[oobe] Simulating Wi-Fi connect to '{}'", ssid);
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -83,8 +132,8 @@ fn oobe_check_internet() -> bool {
 
 fn oobe_scan_networks() -> Vec<(String, String)> {
     if cfg!(target_os = "linux") {
-        let Ok(out) = std::process::Command::new("nmcli")
-            .args(["-t", "-f", "SSID,SIGNAL", "device", "wifi", "list"])
+        let Ok(out) = std::process::Command::new("sudo")
+            .args(["nmcli", "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list"])
             .output()
         else {
             return vec![];

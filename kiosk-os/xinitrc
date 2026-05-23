@@ -14,6 +14,13 @@ if command -v openbox-session >/dev/null 2>&1; then
     openbox-session &
 fi
 
+# Start onboard on-screen keyboard if installed (touch input for kiosk settings).
+# --xid mode makes it dockable; we use floating layout with auto-show on text focus.
+# Layout 'Phone' is touch-optimized (large keys, full QWERTY + symbols).
+if command -v onboard >/dev/null 2>&1; then
+    onboard --layout=Phone --theme=Nightshade &
+fi
+
 # Execute the R-Audio launcher. 
 # Using "exec" makes it replace the shell process, ensuring X11 shuts down if the launcher exits.
 exec /usr/local/bin/r-audio-launcher

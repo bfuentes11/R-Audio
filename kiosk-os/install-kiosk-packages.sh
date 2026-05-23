@@ -20,6 +20,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     openbox \
     pulseaudio \
     libavahi-compat-libdnssd1 \
-    bluez-tools
+    bluez-tools \
+    onboard
 
 echo "[r-audio-install] All kiosk packages installed successfully."

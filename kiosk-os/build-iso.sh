@@ -54,9 +54,9 @@ fi
 # ------------------------------------------------------------------------------
 # Dependencies
 # ------------------------------------------------------------------------------
-echo "Installing dependencies (xorriso, wget)..."
+echo "Installing dependencies (xorriso, wget, librsvg2-bin)..."
 apt-get update -qq
-apt-get install -y -qq xorriso wget
+apt-get install -y -qq xorriso wget librsvg2-bin
 
 # ------------------------------------------------------------------------------
 # Locate or download the official Debian DVD1
@@ -116,6 +116,18 @@ chmod +x \
     "$WORK_DIR/payload/r-audio-launcher" \
     "$WORK_DIR/payload/postinstall.sh" \
     "$WORK_DIR/payload/install-kiosk-packages.sh"
+
+# ------------------------------------------------------------------------------
+# Bake the Plymouth theme: swap the SVG's black strokes to white (so it shows
+# on Plymouth's black background) and rasterize to PNG at 400×400.
+# ------------------------------------------------------------------------------
+echo "Rendering Plymouth Rust-logo PNG from SVG..."
+mkdir -p "$WORK_DIR/payload/plymouth-theme"
+cp plymouth-theme/r-audio.plymouth "$WORK_DIR/payload/plymouth-theme/r-audio.plymouth"
+cp plymouth-theme/r-audio.script   "$WORK_DIR/payload/plymouth-theme/r-audio.script"
+sed 's/stroke="black"/stroke="white"/g; s/fill="black"/fill="white"/g' \
+    plymouth-theme/rust-logo.svg \
+    | rsvg-convert -w 400 -h 400 -o "$WORK_DIR/payload/plymouth-theme/rust-logo.png"
 
 # Preseed (placed at the ISO root — d-i reads it as /cdrom/preseed.cfg)
 cp preseed.cfg "$WORK_DIR/preseed.cfg"
