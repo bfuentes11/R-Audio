@@ -7,11 +7,15 @@ xset s off
 xset s noblank
 xset -dpms
 
-# Start openbox if installed (not present on first boot — installed by OOBE after Wi-Fi).
-# Slint fullscreen apps work without a WM; openbox is only needed once the
-# kiosk is fully configured and running the main player.
+# Start a window manager so X11 honors EWMH fullscreen hints from Slint.
+# Prefer openbox once installed; fall back to twm (on DVD1) for the first
+# boot before install-kiosk-packages.sh apt-installs openbox.
 if command -v openbox-session >/dev/null 2>&1; then
     openbox-session &
+elif command -v twm >/dev/null 2>&1; then
+    # twm with no config focuses windows on enter and lets fullscreen requests
+    # resize the window to the full screen.
+    twm &
 fi
 
 # Start onboard on-screen keyboard if installed (touch input for kiosk settings).

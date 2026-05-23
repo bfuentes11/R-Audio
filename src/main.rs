@@ -35,47 +35,96 @@ fn mark_setup_complete() {
     println!("[oobe] Setup complete flag written.");
 }
 
-/// Pre-flight: make sure NetworkManager has the radio on and an unmanaged
-/// device hasn't claimed the Wi-Fi adapter. Without this, `nmcli device wifi
-/// hotspot` silently no-ops on bare metal.
-fn oobe_prepare_wifi_radio() {
-    if !cfg!(target_os = "linux") { return; }
-    // Turn the radio on (no-op if already on).
+/// Wait up to ~30s for NetworkManager to be active. Returns true if active.
+fn oobe_wait_for_nm() -> bool {
+    for _ in 0..30 {
+        let ok = std::process::Command::new("systemctl")
+            .args(["is-active", "--quiet", "NetworkManager"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok { return true; }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    false
+}
+
+/// Auto-detect the first Wi-Fi device name (wlan0, wlp2s0, etc.).
+fn oobe_find_wifi_device() -> Option<String> {
+    let out = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "DEVICE,TYPE", "device"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 2 && parts[1] == "wifi" {
+                Some(parts[0].to_string())
+            } else {
+                None
+            }
+        })
+}
+
+/// Try to bring up the hotspot. Returns a human-readable error on failure
+/// so the OOBE UI can show it directly on the kiosk screen.
+fn oobe_start_hotspot() -> Result<(), String> {
+    if !cfg!(target_os = "linux") {
+        println!("[oobe] Simulating hotspot start.");
+        return Ok(());
+    }
+
+    // 1. Wait for NetworkManager to be up (it auto-starts at boot but may
+    //    not be ready the instant r-audio launches).
+    if !oobe_wait_for_nm() {
+        return Err("NetworkManager not active after 30s".to_string());
+    }
+
+    // 2. Unblock rfkill (some firmware boots with a soft block on Wi-Fi).
+    let _ = std::process::Command::new("sudo")
+        .args(["rfkill", "unblock", "wifi"])
+        .status();
+
+    // 3. Make sure NetworkManager's radio is on.
     let _ = std::process::Command::new("sudo")
         .args(["nmcli", "radio", "wifi", "on"])
         .status();
-}
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
-fn oobe_start_hotspot() {
-    if cfg!(target_os = "linux") {
-        oobe_prepare_wifi_radio();
-        // NetworkManager requires WPA2; an open hotspot is rejected.
-        // Default password "raudio12" — phones expect 8+ chars.
-        let output = std::process::Command::new("sudo")
-            .args([
-                "nmcli", "device", "wifi", "hotspot",
-                "ssid", "R-Audio-Setup",
-                "password", "raudio12",
-            ])
-            .output();
-        match output {
-            Ok(out) => {
-                if !out.status.success() {
-                    eprintln!(
-                        "[oobe] nmcli hotspot failed (exit {:?}): {}{}",
-                        out.status.code(),
-                        String::from_utf8_lossy(&out.stdout),
-                        String::from_utf8_lossy(&out.stderr),
-                    );
-                } else {
-                    println!("[oobe] Hotspot 'R-Audio-Setup' started (password: raudio12).");
-                }
-            }
-            Err(e) => eprintln!("[oobe] Failed to invoke nmcli: {}", e),
-        }
-    } else {
-        println!("[oobe] Simulating hotspot start.");
+    // 4. Find the Wi-Fi device explicitly — nmcli's auto-pick fails silently
+    //    when there are multiple radios or the default device is "unmanaged".
+    let wifi_dev = oobe_find_wifi_device()
+        .ok_or_else(|| "No Wi-Fi device found (nmcli sees no 'wifi' type)".to_string())?;
+    println!("[oobe] Using Wi-Fi device: {}", wifi_dev);
+
+    // 5. Tear down any previous Hotspot connection (NetworkManager refuses
+    //    to start a new one if 'Hotspot' is already defined but inactive).
+    let _ = std::process::Command::new("sudo")
+        .args(["nmcli", "connection", "delete", "Hotspot"])
+        .output();
+
+    // 6. Start the hotspot. NetworkManager requires WPA2 (8+ char password).
+    let output = std::process::Command::new("sudo")
+        .args([
+            "nmcli", "device", "wifi", "hotspot",
+            "ifname", &wifi_dev,
+            "ssid", "R-Audio-Setup",
+            "password", "raudio12",
+        ])
+        .output()
+        .map_err(|e| format!("nmcli invocation failed: {}", e))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // Slim down — nmcli errors are verbose. Show the most useful tail.
+        let msg = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("nmcli hotspot failed: {}", msg));
     }
+
+    println!("[oobe] Hotspot 'R-Audio-Setup' started (dev: {}, password: raudio12).", wifi_dev);
+    Ok(())
 }
 
 fn oobe_stop_hotspot() {
@@ -290,15 +339,34 @@ async fn start_oobe_wifi(
         }
     });
 
-    oobe_start_hotspot();
-    // Give nmcli a moment to bring up the interface
+    // Run hotspot setup on a blocking thread (it does sync sleeps + sudo
+    // subprocess calls) so we don't stall the tokio runtime.
+    let hotspot_result = tokio::task::spawn_blocking(oobe_start_hotspot)
+        .await
+        .unwrap_or_else(|e| Err(format!("hotspot task panicked: {}", e)));
+
+    // Give nmcli a moment to bring up the interface even on success.
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let _ = slint::invoke_from_event_loop({
         let h = ui_handle.clone();
         move || {
             if let Some(ui) = h.upgrade() {
-                ui.set_oobe_wifi_status("Hotspot active — scan the QR code from your phone.".into());
+                match hotspot_result {
+                    Ok(()) => {
+                        ui.set_oobe_wifi_status(
+                            "Hotspot 'R-Audio-Setup' active (password: raudio12). Scan QR with your phone.".into(),
+                        );
+                    }
+                    Err(msg) => {
+                        // Surface the actual nmcli failure on the kiosk screen
+                        // so it can be debugged without a keyboard or SSH.
+                        eprintln!("[oobe] Hotspot start failed: {}", msg);
+                        ui.set_oobe_wifi_status(
+                            format!("Hotspot failed to start.\n\n{}", msg).into(),
+                        );
+                    }
+                }
             }
         }
     });
@@ -378,7 +446,7 @@ async fn start_oobe_wifi(
             return;
         } else {
             println!("[oobe] Wi-Fi connection failed. Restarting hotspot.");
-            oobe_start_hotspot();
+            let _ = tokio::task::spawn_blocking(oobe_start_hotspot).await;
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             let _ = slint::invoke_from_event_loop({
                 let h = ui_handle.clone();
@@ -1261,6 +1329,14 @@ async fn main() -> Result<(), slint::PlatformError> {
     println!("Booting R-Audio Bare-Metal UI...");
     
     let ui = MainWindow::new()?;
+
+    // Force fullscreen on Linux kiosk targets. On bare X11 without a WM
+    // (first boot before openbox is installed) the SLINT_FULLSCREEN env-var
+    // hint is unreliable, so we set it programmatically here so winit
+    // requests a real fullscreen mode regardless of WM presence.
+    #[cfg(target_os = "linux")]
+    ui.window().set_fullscreen(true);
+
     let spotify = Arc::new(SpotifyProvider::new());
     let player: Arc<Mutex<Option<Arc<LibrespotPlayer>>>> = Arc::new(Mutex::new(None));
 
