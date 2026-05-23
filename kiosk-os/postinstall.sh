@@ -55,6 +55,17 @@ if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
 fi
 EOF
 
+echo "[postinstall] Configuring Xwrapper to allow non-root kiosk user to start X..."
+# Debian's xserver-xorg-legacy ships /etc/X11/Xwrapper.config that defaults to
+# "console" + needs_root_rights=auto. The kiosk user IS on a console (tty1)
+# but xf86EnableIO needs root rights to access hardware I/O ports on bare metal,
+# so we explicitly grant them and allow anybody to start X.
+mkdir -p /target/etc/X11
+cat > /target/etc/X11/Xwrapper.config <<'EOF'
+allowed_users=anybody
+needs_root_rights=yes
+EOF
+
 echo "[postinstall] Configuring TTY1 autologin for the kiosk user..."
 mkdir -p /target/etc/systemd/system/getty@tty1.service.d
 cat > /target/etc/systemd/system/getty@tty1.service.d/override.conf <<'EOF'
