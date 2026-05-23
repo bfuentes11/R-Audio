@@ -71,9 +71,9 @@ echo "[postinstall] Writing /etc/apt/sources.list..."
 # blocking "bad archive mirror" dialog (no network during d-i). Write the
 # sources.list manually here so apt works normally once Wi-Fi is paired.
 cat > /target/etc/apt/sources.list <<'EOF'
-deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
-deb http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
-deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
 EOF
 
 echo "[postinstall] Enabling network and mDNS services..."

@@ -1,225 +1,129 @@
 #!/bin/bash
 # ==============================================================================
-# R-Audio Custom Debian Kiosk OS ISO Builder
+# R-Audio Kiosk ISO Builder — Official Debian DVD Remaster
 # ==============================================================================
-# This script uses Debian's official 'live-build' system to generate a highly
-# optimized, minimal, bootable Live-Installer ISO (.iso) running R-Audio.
+# Downloads the official Debian trixie DVD1 (offline-capable, includes
+# non-free firmware) and remasters it with:
+#
+#   /preseed.cfg          — unattended install config (at ISO root)
+#   /r-audio-payload/     — R-Audio binaries + post-install scripts
+#   /boot/grub/grub.cfg   — replaced to auto-boot the unattended installer
+#
+# Uses xorriso to graft our files onto the original ISO while preserving
+# the exact boot structure (EFI + BIOS). No live-build, no initrd patching.
+#
+# The official Debian DVD's d-i is already configured for offline use —
+# it mounts the disc early, uses it as the apt source, and doesn't require
+# a reachable network mirror. This sidesteps all the "bad archive mirror"
+# issues that plagued the live-build approach.
 #
 # Requirements:
-# - Run this script on a Debian/Ubuntu host or VM.
-# - Root/Sudo privileges are required to run 'debootstrap' and 'live-build'.
+#   - Run as root (xorriso needs it for some ISO operations)
+#   - cargo build --release must have been run first
+#   - ~10 GB free disk space (4.7 GB source ISO + output ISO + working files)
 # ==============================================================================
 
 set -e
 
+# ------------------------------------------------------------------------------
 # Configuration
-DEBIAN_VERSION="bookworm"
-IMAGE_DIR="r-audio-iso-build"
+# ------------------------------------------------------------------------------
+DEBIAN_VERSION="trixie"
+MIRROR="https://cdimage.debian.org/debian-cd/current/amd64/iso-dvd"
 BINARY_PATH="../target/release/R-Audio"
 SETUP_BINARY_PATH="../target/release/r-audio-setup"
+WORK_DIR="r-audio-iso-work"
+OUTPUT_ISO="r-audio-kiosk-${DEBIAN_VERSION}.iso"
 
-echo "=== R-Audio Kiosk ISO Build Utility ==="
+echo "=== R-Audio Kiosk ISO Builder (Remaster) ==="
 
-# 1. Verification checks
+# ------------------------------------------------------------------------------
+# Preflight checks
+# ------------------------------------------------------------------------------
 if [ "$EUID" -ne 0 ]; then
-  echo "ERROR: Please run this script with sudo or as root."
-  exit 1
+    echo "ERROR: Run with sudo or as root."
+    exit 1
 fi
 
 if [ ! -f "$BINARY_PATH" ] || [ ! -f "$SETUP_BINARY_PATH" ]; then
-  echo "ERROR: Compiled release binaries not found."
-  echo "Please build the release binaries first by running: cargo build --release"
-  exit 1
+    echo "ERROR: Release binaries not found."
+    echo "       Run: cargo build --release"
+    exit 1
 fi
 
-echo "Installing ISO builder dependencies (live-build, xorriso, squashfs-tools)..."
-apt-get update && apt-get install -y live-build xorriso squashfs-tools curl wget
+# ------------------------------------------------------------------------------
+# Dependencies
+# ------------------------------------------------------------------------------
+echo "Installing dependencies (xorriso, wget)..."
+apt-get update -qq
+apt-get install -y -qq xorriso wget
 
-# 2. Initialize live-build environment
-rm -rf "$IMAGE_DIR"
-mkdir -p "$IMAGE_DIR"
-cd "$IMAGE_DIR"
+# ------------------------------------------------------------------------------
+# Locate or download the official Debian DVD1
+# ------------------------------------------------------------------------------
+echo "Locating Debian ${DEBIAN_VERSION} DVD1..."
+DVD_ISO=""
 
-echo "Bootstrapping Live-Build configuration..."
-# --debian-installer true (was: live) → ship the standard text-mode d-i,
-# which honors preseed cleanly. The "live" installer is calamares-style and
-# does not respect d-i preseed answers the same way.
-lb config \
-  --binary-images iso-hybrid \
-  --architectures amd64 \
-  --distribution "$DEBIAN_VERSION" \
-  --archive-areas "main contrib non-free non-free-firmware" \
-  --debian-installer true \
-  --debian-installer-gui false \
-  --memtest none \
-  --linux-flavours amd64 \
-  --mirror-bootstrap "http://deb.debian.org/debian/" \
-  --mirror-chroot "http://deb.debian.org/debian/" \
-  --mirror-chroot-security "http://security.debian.org/debian-security/" \
-  --mirror-binary "http://deb.debian.org/debian/" \
-  --mirror-binary-security "http://security.debian.org/debian-security/"
+# Re-use a previously downloaded copy if present in the current directory.
+# In CI, cache this file between runs to avoid the 4.7 GB download every time.
+for f in debian-*-amd64-DVD-1.iso; do
+    if [ -f "$f" ]; then
+        DVD_ISO="$f"
+        echo "  Using cached ISO: $DVD_ISO"
+        break
+    fi
+done
 
-# 3. Configure packages to be bundled into the ISO's local apt pool.
-#
-# Note .binary (NOT .chroot) — this tells live-build to download the
-# packages and place them in the ISO's pool (binary/pool/...) rather than
-# install them into the live chroot. d-i is then preseeded to use the CD
-# as its only apt source, so the entire install runs offline. After the
-# kiosk boots from internal disk, the r-audio-setup OOBE pairs Wi-Fi and
-# any future `apt update` goes over the network normally.
-echo "Configuring offline-install package pool..."
-cat <<EOF > config/package-lists/kiosk.list.binary
-# Display Server & barebones WM
-xserver-xorg
-xinit
-openbox
-xserver-xorg-input-libinput
+if [ -z "$DVD_ISO" ]; then
+    echo "  Fetching directory listing from $MIRROR ..."
+    ISO_NAME=$(wget -q -O- "$MIRROR/" \
+        | grep -oP 'debian-[0-9]+\.[0-9.]+-amd64-DVD-1\.iso(?=")' \
+        | head -1)
 
-# OpenGL (required by Slint's Skia renderer)
-libgl1-mesa-dri
+    if [ -z "$ISO_NAME" ]; then
+        echo "ERROR: Could not find DVD1 ISO at $MIRROR"
+        echo "       Check https://cdimage.debian.org/debian-cd/current/amd64/iso-dvd/"
+        exit 1
+    fi
 
-# Audio Framework
-alsa-utils
-pulseaudio
-
-# Local Networking, mDNS pairing & Wifi management
-avahi-daemon
-libavahi-compat-libdnssd1
-dbus-x11
-network-manager
-iw
-wpasupplicant
-
-# System essentials
-ca-certificates
-curl
-wget
-sudo
-
-# Surface Go 2 hardware firmware (Wi-Fi, touchscreen)
-firmware-misc-nonfree
-firmware-iwlwifi
-
-# Bluetooth support
-bluez
-bluez-tools
-
-# X11 utilities (xset — needed by .xinitrc to disable screensaver/DPMS)
-x11-xserver-utils
-EOF
-
-# 4. Inject Kiosk OS files directly into the target filesystem
-echo "Injecting R-Audio bare-metal configurations..."
-
-# Create includes directories representing the target root directory
-INCLUDES="config/includes.chroot"
-mkdir -p "$INCLUDES/usr/local/bin"
-mkdir -p "$INCLUDES/etc/systemd/system"
-mkdir -p "$INCLUDES/etc/default"
-mkdir -p "$INCLUDES/etc/systemd/system/getty@tty1.service.d"
-mkdir -p "$INCLUDES/home/kiosk"
-
-# Copy our compiled R-Audio Rust binary
-cp "../$BINARY_PATH" "$INCLUDES/usr/local/bin/r-audio"
-chmod +x "$INCLUDES/usr/local/bin/r-audio"
-
-# Copy the Wi-Fi setup Rust binary
-cp "../$SETUP_BINARY_PATH" "$INCLUDES/usr/local/bin/r-audio-setup"
-chmod +x "$INCLUDES/usr/local/bin/r-audio-setup"
-
-# Copy the launcher orchestrator script
-cp ../r-audio-launcher.sh "$INCLUDES/usr/local/bin/r-audio-launcher"
-chmod +x "$INCLUDES/usr/local/bin/r-audio-launcher"
-
-# Copy the custom systemd player service
-cp ../r-audio.service "$INCLUDES/etc/systemd/system/r-audio.service"
-
-# Copy the environment file template as the active configuration
-cp ../r-audio.env.template "$INCLUDES/etc/default/r-audio"
-
-# Configure custom system hostname (r-audio.local resolving)
-echo "r-audio" > "$INCLUDES/etc/hostname"
-cat <<EOF > "$INCLUDES/etc/hosts"
-127.0.0.1   localhost r-audio
-::1         localhost ip6-localhost ip6-loopback
-ff02::1     ip6-allnodes
-ff02::2     ip6-allrouters
-EOF
-
-
-# Copy the X11 bare startup script
-cp ../xinitrc "$INCLUDES/home/kiosk/.xinitrc"
-
-# 5. Configure TTY1 Auto-Login without passwords (standard kiosk practice)
-cat <<EOF > "$INCLUDES/etc/systemd/system/getty@tty1.service.d/override.conf"
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin kiosk --noclear %I \$TERM
-EOF
-
-# 6. Configure Bash Profile to start X Server dynamically on login
-cat <<EOF > "$INCLUDES/home/kiosk/.bash_profile"
-# Automatically launch bare Xorg when booting into TTY1
-if [ -z "\$DISPLAY" ] && [ "\$(tty)" = "/dev/tty1" ]; then
-    exec startx -- -nocursor
+    echo "  Downloading $ISO_NAME (~4.7 GB) ..."
+    echo "  Tip: cache this file to skip the download on future builds."
+    wget -c --progress=bar:force "$MIRROR/$ISO_NAME" -O "$ISO_NAME"
+    DVD_ISO="$ISO_NAME"
 fi
-EOF
 
-# Set proper permissions inside the target root filesystem
-# Sudoers configuration for kiosk user to allow autostart and network tasks
-mkdir -p "$INCLUDES/etc/sudoers.d"
-echo "kiosk ALL=(ALL) NOPASSWD: ALL" > "$INCLUDES/etc/sudoers.d/kiosk"
-chmod 440 "$INCLUDES/etc/sudoers.d/kiosk"
+echo "  Source ISO: $DVD_ISO ($(du -h "$DVD_ISO" | cut -f1))"
 
-# 7. Unattended-install payload: drop preseed + R-Audio binaries onto the
-#    ISO root so the Debian Installer can read them at /cdrom/... and the
-#    preseed late_command can copy them into the freshly installed system.
-echo "Staging unattended-install preseed and R-Audio payload..."
-BIN_INCLUDES="config/includes.binary"
-PAYLOAD_DIR="$BIN_INCLUDES/r-audio-payload"
-mkdir -p "$PAYLOAD_DIR"
+# ------------------------------------------------------------------------------
+# Stage files to inject into the ISO
+# ------------------------------------------------------------------------------
+echo "Staging R-Audio payload..."
+rm -rf "$WORK_DIR"
+mkdir -p "$WORK_DIR/payload"
 
-# preseed.cfg goes at the ISO root → /cdrom/preseed.cfg from the installer's view
-cp ../preseed.cfg "$BIN_INCLUDES/preseed.cfg"
+# R-Audio runtime binaries
+cp "$BINARY_PATH"           "$WORK_DIR/payload/r-audio"
+cp "$SETUP_BINARY_PATH"     "$WORK_DIR/payload/r-audio-setup"
+cp r-audio-launcher.sh      "$WORK_DIR/payload/r-audio-launcher"
+cp r-audio.service          "$WORK_DIR/payload/r-audio.service"
+cp r-audio.env.template     "$WORK_DIR/payload/r-audio.env"
+cp xinitrc                  "$WORK_DIR/payload/xinitrc"
+cp postinstall.sh           "$WORK_DIR/payload/postinstall.sh"
+chmod +x \
+    "$WORK_DIR/payload/r-audio" \
+    "$WORK_DIR/payload/r-audio-setup" \
+    "$WORK_DIR/payload/r-audio-launcher" \
+    "$WORK_DIR/payload/postinstall.sh"
 
-# Everything the post-install script needs to wire up the installed system
-cp "../$BINARY_PATH"        "$PAYLOAD_DIR/r-audio"
-cp "../$SETUP_BINARY_PATH"  "$PAYLOAD_DIR/r-audio-setup"
-cp ../r-audio-launcher.sh   "$PAYLOAD_DIR/r-audio-launcher"
-cp ../r-audio.service       "$PAYLOAD_DIR/r-audio.service"
-cp ../r-audio.env.template  "$PAYLOAD_DIR/r-audio.env"
-cp ../xinitrc               "$PAYLOAD_DIR/xinitrc"
-cp ../postinstall.sh        "$PAYLOAD_DIR/postinstall.sh"
-chmod +x "$PAYLOAD_DIR/r-audio" \
-         "$PAYLOAD_DIR/r-audio-setup" \
-         "$PAYLOAD_DIR/r-audio-launcher" \
-         "$PAYLOAD_DIR/postinstall.sh"
+# Preseed (placed at the ISO root — d-i reads it as /cdrom/preseed.cfg)
+cp preseed.cfg "$WORK_DIR/preseed.cfg"
 
-# 8. Bootloader overrides — replace live-build's templates with a self-contained
-#    config whose default entry is the unattended installer (timeout 0, hidden).
-#    Live mode and a manual installer entry are kept as menu fallbacks.
-#
-#    IMPORTANT: live-build's binary_grub_cfg / binary_syslinux steps do sed
-#    substitution on these files, replacing @KERNEL_DI@ / @INITRD_DI@ /
-#    @KERNEL_LIVE@ / @INITRD_LIVE@ / @APPEND_INSTALL@ / @APPEND_LIVE@ with
-#    the real on-ISO paths and args. Use the placeholders — hardcoding paths
-#    like /install.amd/vmlinuz breaks because current live-build emits
-#    /install/vmlinuz instead.
-#
-#    `grub-pc` controls BOTH the BIOS GRUB menu and the UEFI menu — the
-#    EFI grub.cfg inside efi.img is a tiny stub that just redirects to
-#    /boot/grub/grub.cfg (which is generated from this directory).
-echo "Writing bootloader overrides (default = unattended installer)..."
-mkdir -p config/bootloaders/grub-pc config/bootloaders/isolinux
-
-cat <<'GRUBCFG' > config/bootloaders/grub-pc/grub.cfg
-# R-Audio Kiosk GRUB config — overrides live-build template.
-# Default entry is the unattended installer; menu is hidden with timeout 0.
-# Hold Esc/Shift during boot to interrupt and pick a different entry.
-# @KERNEL_*@ / @INITRD_*@ / @APPEND_*@ are replaced at build time by
-# live-build's binary_grub_cfg step with real ISO paths and args.
-
-if loadfont $prefix/font.pf2 ; then
+# ------------------------------------------------------------------------------
+# Custom GRUB config — default entry is the unattended installer
+# timeout=0 + hidden so the Surface boots straight in; hold Shift for menu
+# ------------------------------------------------------------------------------
+cat > "$WORK_DIR/grub.cfg" <<'GRUBEOF'
+if loadfont $prefix/font.pf2; then
     set gfxmode=auto
     insmod all_video
     insmod gfxterm
@@ -231,138 +135,43 @@ set timeout=0
 set timeout_style=hidden
 
 menuentry "R-Audio Kiosk - Auto-Install (WIPES DISK)" {
-    linux   @KERNEL_DI@ auto=true priority=critical preseed/file=/preseed.cfg vga=788 @APPEND_INSTALL@ --- quiet
-    initrd  @INITRD_DI@
+    linux  /install.amd/vmlinuz auto=true priority=critical preseed/file=/cdrom/preseed.cfg vga=788 --- quiet
+    initrd /install.amd/initrd.gz
 }
 
-menuentry "Live system (debug fallback)" {
-    linux   @KERNEL_LIVE@ boot=live components @APPEND_LIVE@ quiet splash
-    initrd  @INITRD_LIVE@
+menuentry "Install (interactive fallback)" {
+    linux  /install.amd/vmlinuz vga=788 --- quiet
+    initrd /install.amd/initrd.gz
 }
 
-menuentry "Manual install (interactive)" {
-    linux   @KERNEL_DI@ vga=788 @APPEND_INSTALL@ --- quiet
-    initrd  @INITRD_DI@
+menuentry "Graphical Install (interactive fallback)" {
+    linux  /install.amd/vmlinuz video=vesa:ywrap,mtrr vga=788 --- quiet
+    initrd /install.amd/gtk/initrd.gz
 }
-GRUBCFG
+GRUBEOF
 
-# Legacy BIOS path — Surface Go 2 boots UEFI, but include this so the ISO
-# is also bootable on plain BIOS hardware for development. Same @VAR@
-# placeholders apply; binary_syslinux does the substitution.
-cat <<'ISOCFG' > config/bootloaders/isolinux/isolinux.cfg
-default unattended
-prompt 0
-timeout 1
-
-label unattended
-    linux  @KERNEL_DI@
-    initrd @INITRD_DI@
-    append vga=788 auto=true priority=critical preseed/file=/preseed.cfg @APPEND_INSTALL@ --- quiet
-
-label live
-    linux  @KERNEL_LIVE@
-    initrd @INITRD_LIVE@
-    append boot=live components @APPEND_LIVE@ quiet splash
-
-label install
-    linux  @KERNEL_DI@
-    initrd @INITRD_DI@
-    append vga=788 @APPEND_INSTALL@ --- quiet
-ISOCFG
-
-# 9. Post-configuration setup
-mkdir -p config/hooks/normal
-
-# Binary-stage hook: embed preseed.cfg into the installer initrd.
+# ------------------------------------------------------------------------------
+# Build the remastered ISO
 #
-# Without this, the kernel arg `preseed/file=/cdrom/preseed.cfg` fails on
-# USB-booted hybrid ISOs because d-i's cdrom-detect runs AFTER preseed
-# loading (Debian bug #847166), so /cdrom isn't mounted yet when d-i tries
-# to read the file. Embedding the preseed inside the initrd sidesteps the
-# whole mount-timing problem — d-i finds /preseed.cfg the moment the
-# initramfs is unpacked.
-#
-# Mechanism: the Linux initramfs loader concatenates multiple cpio archives,
-# so we just decompress the existing initrd, append a one-file cpio archive
-# containing preseed.cfg, and recompress. The original installer contents
-# are untouched.
-cat <<'EOF' > config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
-#!/bin/sh
-# NOTE: live-build runs *.hook.binary scripts with CWD = ./binary (the build's
-# binary tree), NOT the live-build root. So paths here are relative to the
-# future ISO root — e.g. ./install/initrd.gz, ./preseed.cfg, etc.
-#
-# d-i's S30initrd-preseed startup script does this exact check:
-#     if [ -e /preseed.cfg ]; then preseed_location file:///preseed.cfg; fi
-# So our job is just to make sure /preseed.cfg exists at the root of the
-# initrd filesystem at boot time.
-set -e
+# xorriso -indev / -outdev copies the original ISO and applies our changes:
+#   -map src dst   — graft a local file/dir onto the ISO at the given path
+#   -boot_image any replay — preserve the original EFI + BIOS boot setup
+#                            exactly as Debian shipped it
+# ------------------------------------------------------------------------------
+echo "Building remastered ISO: $OUTPUT_ISO ..."
+xorriso \
+    -indev  "$DVD_ISO" \
+    -outdev "$OUTPUT_ISO" \
+    -boot_image any replay \
+    -map "$WORK_DIR/preseed.cfg"  /preseed.cfg \
+    -map "$WORK_DIR/grub.cfg"     /boot/grub/grub.cfg \
+    -map "$WORK_DIR/payload"      /r-audio-payload \
+    --
 
-INITRD=$(find . -path '*install*' -name 'initrd.gz' -type f | head -n1)
-if [ -z "$INITRD" ]; then
-    echo "[embed-preseed] ERROR: installer initrd not found under ./"
-    echo "[embed-preseed] available initrd files:"
-    find . -name 'initrd*' -type f
-    exit 1
-fi
-ORIG=$(wc -c < "$INITRD")
-echo "[embed-preseed] target: $INITRD (was $ORIG bytes)"
-
-if [ ! -f ./preseed.cfg ]; then
-    echo "[embed-preseed] ERROR: ./preseed.cfg missing from binary tree"
-    ls -la .
-    exit 1
-fi
-echo "[embed-preseed] preseed.cfg: $(wc -c < ./preseed.cfg) bytes"
-
-WORK=$(mktemp -d)
-trap "rm -rf $WORK" EXIT
-cp ./preseed.cfg "$WORK/preseed.cfg"
-
-# Build a fresh gzip-compressed cpio archive containing only preseed.cfg
-# at the root, then concatenate it onto the existing initrd.gz.
-# The Linux initramfs loader natively merges multiple concatenated
-# (compressed) cpio archives into a single initramfs filesystem at boot.
-# Ref: kernel Documentation/early-userspace/buffer-format.txt
-#
-# This replaces the previous `cpio -o -A -F initrd-raw` approach, which
-# was silently failing to append for reasons unclear — d-i would boot
-# with no /preseed.cfg in the initrd and fall back to /cdrom/preseed.cfg
-# (which doesn't exist either on a USB-booted hybrid ISO).
-( cd "$WORK" && echo preseed.cfg | cpio -o -H newc ) > "$WORK/preseed.cpio" 2>"$WORK/cpio.log"
-cat "$WORK/cpio.log" >&2
-echo "[embed-preseed] cpio archive: $(wc -c < $WORK/preseed.cpio) bytes"
-
-gzip -9 < "$WORK/preseed.cpio" >> "$INITRD"
-
-NEW=$(wc -c < "$INITRD")
-APPENDED=$((NEW - ORIG))
-echo "[embed-preseed] initrd now $NEW bytes (+$APPENDED appended)"
-
-# A gzipped cpio archive containing one small file is ~150-300 bytes.
-# If we appended much less, the embed didn't happen.
-if [ "$APPENDED" -lt 100 ]; then
-    echo "[embed-preseed] ERROR: appended only $APPENDED bytes — embed failed"
-    exit 1
-fi
-
-echo "[embed-preseed] success"
-EOF
-chmod +x config/hooks/normal/0500-embed-preseed-in-initrd.hook.binary
-
-# NOTE: there is intentionally NO chroot hook here. With kiosk packages
-# now bundled in the binary apt pool (not installed in the live chroot),
-# `systemctl enable avahi-daemon` and `systemctl enable NetworkManager`
-# would fail in the chroot because those packages aren't there. d-i
-# handles kiosk user creation via preseed's passwd/make-user, swap is
-# handled by partman's `atomic` recipe (separate swap partition), and
-# postinstall.sh enables services on the installed system. Live mode
-# is now a bare-Debian debug shell — no kiosk runtime in it.
-
-# 10. Compile the ISO
-echo "Compiling the bootable hybrid Kiosk ISO..."
-lb build
-
-echo "=== SUCCESS! ==="
-echo "Your custom bootable kiosk ISO has been created:"
-ls -lh live-image-amd64.hybrid.iso
+echo ""
+echo "=== SUCCESS ==="
+echo "Remastered ISO: $OUTPUT_ISO"
+ls -lh "$OUTPUT_ISO"
+echo ""
+echo "Write to USB with:"
+echo "  dd if=$OUTPUT_ISO of=/dev/sdX bs=4M status=progress && sync"
