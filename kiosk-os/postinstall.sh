@@ -36,7 +36,22 @@ chmod +x /target/home/kiosk/.xinitrc
 cat > /target/home/kiosk/.bash_profile <<'EOF'
 # Auto-launch bare Xorg on TTY1 (kiosk path)
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
-    exec startx -- -nocursor
+    # Log X session errors so they can be read from another TTY or SSH
+    startx -- -nocursor 2>/home/kiosk/startx-error.log
+    EXIT_CODE=$?
+    # Don't loop on crash — show the error and pause so it's readable
+    echo ""
+    echo "=== startx exited (code $EXIT_CODE) ==="
+    echo "Error log: /home/kiosk/startx-error.log"
+    echo ""
+    cat /home/kiosk/startx-error.log
+    echo ""
+    echo "=== /home/kiosk/.xsession-errors ==="
+    cat /home/kiosk/.xsession-errors 2>/dev/null || echo "(no xsession-errors file)"
+    echo ""
+    echo "Press Enter to retry, or Ctrl+C to stay at shell."
+    read _
+    exec "$BASH" --login
 fi
 EOF
 
