@@ -104,16 +104,18 @@ mkdir -p "$WORK_DIR/payload"
 # R-Audio runtime binaries
 cp "$BINARY_PATH"           "$WORK_DIR/payload/r-audio"
 cp "$SETUP_BINARY_PATH"     "$WORK_DIR/payload/r-audio-setup"
-cp r-audio-launcher.sh      "$WORK_DIR/payload/r-audio-launcher"
-cp r-audio.service          "$WORK_DIR/payload/r-audio.service"
-cp r-audio.env.template     "$WORK_DIR/payload/r-audio.env"
-cp xinitrc                  "$WORK_DIR/payload/xinitrc"
-cp postinstall.sh           "$WORK_DIR/payload/postinstall.sh"
+cp r-audio-launcher.sh         "$WORK_DIR/payload/r-audio-launcher"
+cp r-audio.service             "$WORK_DIR/payload/r-audio.service"
+cp r-audio.env.template        "$WORK_DIR/payload/r-audio.env"
+cp xinitrc                     "$WORK_DIR/payload/xinitrc"
+cp postinstall.sh              "$WORK_DIR/payload/postinstall.sh"
+cp install-kiosk-packages.sh   "$WORK_DIR/payload/install-kiosk-packages.sh"
 chmod +x \
     "$WORK_DIR/payload/r-audio" \
     "$WORK_DIR/payload/r-audio-setup" \
     "$WORK_DIR/payload/r-audio-launcher" \
-    "$WORK_DIR/payload/postinstall.sh"
+    "$WORK_DIR/payload/postinstall.sh" \
+    "$WORK_DIR/payload/install-kiosk-packages.sh"
 
 # Preseed (placed at the ISO root — d-i reads it as /cdrom/preseed.cfg)
 cp preseed.cfg "$WORK_DIR/preseed.cfg"

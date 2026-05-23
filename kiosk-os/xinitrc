@@ -7,8 +7,12 @@ xset s off
 xset s noblank
 xset -dpms
 
-# Start the openbox window manager in the background to handle full-screen window sizing
-openbox-session &
+# Start openbox if installed (not present on first boot — installed by OOBE after Wi-Fi).
+# Slint fullscreen apps work without a WM; openbox is only needed once the
+# kiosk is fully configured and running the main player.
+if command -v openbox-session >/dev/null 2>&1; then
+    openbox-session &
+fi
 
 # Execute the R-Audio launcher. 
 # Using "exec" makes it replace the shell process, ensuring X11 shuts down if the launcher exits.

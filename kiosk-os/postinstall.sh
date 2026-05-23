@@ -16,12 +16,14 @@ set -e
 PAYLOAD=/target/tmp/r-audio-payload
 
 echo "[postinstall] Installing R-Audio binaries..."
-cp "$PAYLOAD/r-audio"          /target/usr/local/bin/r-audio
-cp "$PAYLOAD/r-audio-setup"    /target/usr/local/bin/r-audio-setup
-cp "$PAYLOAD/r-audio-launcher" /target/usr/local/bin/r-audio-launcher
+cp "$PAYLOAD/r-audio"                  /target/usr/local/bin/r-audio
+cp "$PAYLOAD/r-audio-setup"            /target/usr/local/bin/r-audio-setup
+cp "$PAYLOAD/r-audio-launcher"         /target/usr/local/bin/r-audio-launcher
+cp "$PAYLOAD/install-kiosk-packages.sh" /target/usr/local/bin/r-audio-install-packages
 chmod +x /target/usr/local/bin/r-audio \
          /target/usr/local/bin/r-audio-setup \
-         /target/usr/local/bin/r-audio-launcher
+         /target/usr/local/bin/r-audio-launcher \
+         /target/usr/local/bin/r-audio-install-packages
 
 echo "[postinstall] Installing systemd unit and environment file..."
 cp "$PAYLOAD/r-audio.service" /target/etc/systemd/system/r-audio.service
@@ -47,6 +49,8 @@ ExecStart=-/sbin/agetty --autologin kiosk --noclear %I $TERM
 EOF
 
 echo "[postinstall] Granting passwordless sudo to kiosk..."
+# This is a single-purpose kiosk device. The kiosk user needs unrestricted
+# sudo for nmcli (Wi-Fi), apt (package install on first boot), and reboot.
 echo 'kiosk ALL=(ALL) NOPASSWD: ALL' > /target/etc/sudoers.d/kiosk
 chmod 440 /target/etc/sudoers.d/kiosk
 

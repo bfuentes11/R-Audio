@@ -285,7 +285,37 @@ async fn start_oobe_wifi(
         }).await.unwrap_or(false);
 
         if connected {
-            println!("[oobe] Wi-Fi connected. Proceeding to Spotify pairing.");
+            println!("[oobe] Wi-Fi connected. Installing kiosk packages before Spotify pairing.");
+
+            // ── Install packages not on the Debian DVD (openbox, pulseaudio, etc.) ──
+            // This only runs on the very first boot. On subsequent runs is_first_run()
+            // is false so start_oobe_wifi is never called.
+            let pkg_script = std::path::Path::new("/usr/local/bin/r-audio-install-packages");
+            if pkg_script.exists() {
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || {
+                        if let Some(ui) = h.upgrade() {
+                            ui.set_oobe_wifi_status("Installing kiosk software… (2–3 min)".into());
+                        }
+                    }
+                });
+
+                let install_result = tokio::task::spawn_blocking(|| {
+                    std::process::Command::new("sudo")
+                        .arg("/usr/local/bin/r-audio-install-packages")
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
+                }).await.unwrap_or(false);
+
+                if install_result {
+                    println!("[oobe] Kiosk packages installed successfully.");
+                } else {
+                    println!("[oobe] Package install failed or script not found — continuing anyway.");
+                }
+            }
+
             let _ = slint::invoke_from_event_loop({
                 let h = ui_handle.clone();
                 move || {
@@ -684,6 +714,29 @@ fn start_pairing_flow(
                 Ok(Ok(())) => {
                     println!("[main] Pairing completed successfully!");
                     mark_setup_complete();
+
+                    // If this was a first-run OOBE (package install script was present),
+                    // reboot so openbox + pulseaudio (just installed) take effect cleanly.
+                    let needs_reboot = std::path::Path::new("/usr/local/bin/r-audio-install-packages").exists()
+                        && cfg!(target_os = "linux");
+                    if needs_reboot {
+                        let _ = slint::invoke_from_event_loop({
+                            let h = ui_pairing.clone();
+                            move || {
+                                if let Some(ui) = h.upgrade() {
+                                    ui.set_oobe_wifi_status("Setup complete! Rebooting…".into());
+                                    ui.set_active_view("oobe-wifi".into());
+                                }
+                            }
+                        });
+                        println!("[main] First-run setup complete. Rebooting to apply kiosk packages.");
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        let _ = std::process::Command::new("sudo")
+                            .args(["reboot"])
+                            .status();
+                        return;
+                    }
+
                     run_authenticated_startup(ui_pairing, spotify_pairing, player_pairing, go_next_pairing, true).await;
                 }
                 Ok(Err(e)) => {
