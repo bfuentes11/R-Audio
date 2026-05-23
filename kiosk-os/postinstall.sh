@@ -55,17 +55,6 @@ if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
 fi
 EOF
 
-echo "[postinstall] Configuring Xwrapper to allow non-root kiosk user to start X..."
-# Debian's xserver-xorg-legacy ships /etc/X11/Xwrapper.config that defaults to
-# "console" + needs_root_rights=auto. The kiosk user IS on a console (tty1)
-# but xf86EnableIO needs root rights to access hardware I/O ports on bare metal,
-# so we explicitly grant them and allow anybody to start X.
-mkdir -p /target/etc/X11
-cat > /target/etc/X11/Xwrapper.config <<'EOF'
-allowed_users=anybody
-needs_root_rights=yes
-EOF
-
 echo "[postinstall] Configuring TTY1 autologin for the kiosk user..."
 mkdir -p /target/etc/systemd/system/getty@tty1.service.d
 cat > /target/etc/systemd/system/getty@tty1.service.d/override.conf <<'EOF'
@@ -110,28 +99,14 @@ echo "[postinstall] Enabling network and mDNS services..."
 in-target systemctl enable avahi-daemon
 in-target systemctl enable NetworkManager
 
-echo "[postinstall] Configuring Plymouth graphical boot splash..."
-# Replace the default GRUB_CMDLINE_LINUX_DEFAULT line so kernel boot text
-# is hidden behind the Plymouth splash. loglevel=3 silences non-critical
-# kernel messages; vt.global_cursor_default=0 hides the blinking cursor.
-# We keep `quiet splash` as the canonical pair Plymouth listens for.
-sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 vt.global_cursor_default=0"|' /target/etc/default/grub
-
-# Install the custom R-Audio Plymouth theme (pulsing white Rust logo on black).
-echo "[postinstall] Installing R-Audio Plymouth theme..."
+echo "[postinstall] Staging R-Audio Plymouth theme assets..."
+# Plymouth itself isn't on the Debian DVD1 — it's apt-installed by
+# r-audio-install-packages after Wi-Fi connects. We pre-stage the theme files
+# now so they're already in place when Plymouth installs and gets activated.
 mkdir -p /target/usr/share/plymouth/themes/r-audio
 cp "$PAYLOAD/plymouth-theme/r-audio.plymouth" /target/usr/share/plymouth/themes/r-audio/r-audio.plymouth
 cp "$PAYLOAD/plymouth-theme/r-audio.script"   /target/usr/share/plymouth/themes/r-audio/r-audio.script
 cp "$PAYLOAD/plymouth-theme/rust-logo.png"    /target/usr/share/plymouth/themes/r-audio/rust-logo.png
-
-# Activate the theme. Updates /etc/alternatives/default.plymouth.
-in-target plymouth-set-default-theme r-audio
-
-# Rebuild initramfs so Plymouth + the r-audio theme assets are included in
-# the early boot stage, and regenerate GRUB config so the new kernel cmdline
-# takes effect on the very next boot.
-in-target update-initramfs -u
-in-target update-grub
 
 # Clean up the payload copy so the installed system isn't carrying it around
 rm -rf "$PAYLOAD" /target/tmp/postinstall.sh
