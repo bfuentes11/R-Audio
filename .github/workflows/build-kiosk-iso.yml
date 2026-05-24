@@ -71,13 +71,15 @@ jobs:
         run: sudo bash build-iso.sh
         timeout-minutes: 45
 
-      # ── 7. Upload ISO artifact ─────────────────────────────────────────────
-      - name: Upload ISO artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: r-audio-kiosk-iso
-          path: kiosk-os/r-audio-kiosk-trixie.iso
-          retention-days: 14
+     # ── 7. Setup rclone & Upload to OneDrive ─────────────────────────────
+      - name: Install and Configure rclone
+        run: |
+          sudo apt-get update && sudo apt-get install -y rclone
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+
+      - name: Upload ISO to OneDrive
+        run: rclone copy kiosk-os/r-audio-kiosk-trixie.iso onedrive:/SurfaceKioskBuilds/
 
       # ── 8. On tagged releases, publish as a GitHub Release asset ──────────
       - name: Create GitHub Release
