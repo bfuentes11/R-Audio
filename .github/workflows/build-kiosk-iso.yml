@@ -72,11 +72,14 @@ jobs:
         timeout-minutes: 45
 
      # ── 7. Setup rclone & Upload to OneDrive ─────────────────────────────
+      # ── 7. Setup rclone & Upload to OneDrive ─────────────────────────────
       - name: Install and Configure rclone
         run: |
           sudo apt-get update && sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+          cat << 'EOF' > ~/.config/rclone/rclone.conf
+          ${{ secrets.RCLONE_CONF }}
+          EOF
 
       - name: Upload ISO to OneDrive
         run: rclone copy kiosk-os/r-audio-kiosk-trixie.iso onedrive:/SurfaceKioskBuilds/
