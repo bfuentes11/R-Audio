@@ -71,7 +71,6 @@ jobs:
         run: sudo bash build-iso.sh
         timeout-minutes: 45
 
-     # ── 7. Setup rclone & Upload to OneDrive ─────────────────────────────
       # ── 7. Setup rclone & Upload to OneDrive ─────────────────────────────
       - name: Install and Configure rclone
         run: |
