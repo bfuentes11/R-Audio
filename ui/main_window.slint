@@ -37,6 +37,10 @@ export component MainWindow inherits Window {
     in-out property <string> active-view: "home";
     in-out property <bool> player-expanded: false;
 
+    // ── Wi-Fi status indicator (top-right corner, shown on every view) ─────
+    in property <bool> wifi-connected: false;
+    in property <string> wifi-ssid: "";
+
     in property <bool> spotify-has-more: false;
     in property <bool> spotify-is-loading: true;
     callback toggle-fullscreen();
@@ -724,6 +728,48 @@ export component MainWindow inherits Window {
         animate y {
             duration: 350ms;
             easing: ease-out;
+        }
+    }
+
+    // ── Floating Wi-Fi status pill (top-right corner) ──────────────────────
+    // Rendered after every layout so it floats on top of all views. Bound to
+    // wifi-connected + wifi-ssid which the Rust side polls and updates every
+    // few seconds.
+    Rectangle {
+        x: root.width - self.width - 12px;
+        y: 12px;
+        width: 190px;
+        height: 28px;
+        border-radius: 14px;
+        background: root.wifi-connected ? #00c85322 : #ff444422;
+        border-width: 1px;
+        border-color: root.wifi-connected ? #00c85388 : #ff444488;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 8px;
+            alignment: start;
+
+            // Status dot
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.wifi-connected ? #00ff66 : #ff5555;
+                y: (parent.height - self.height) / 2;
+            }
+
+            Text {
+                text: root.wifi-connected
+                    ? (root.wifi-ssid != "" ? root.wifi-ssid : "Wi-Fi connected")
+                    : "No Wi-Fi";
+                color: root.wifi-connected ? #ffffff : #ffcccc;
+                font-size: 11px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
         }
     }
 

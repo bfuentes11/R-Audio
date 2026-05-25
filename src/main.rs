@@ -181,6 +181,47 @@ fn oobe_check_internet() -> bool {
         .unwrap_or(false)
 }
 
+/// Returns (is_connected, ssid). is_connected is true only if there's an
+/// active Wi-Fi connection AND internet is reachable (so the indicator
+/// reflects actual reachability, not just association).
+fn check_wifi_status() -> (bool, String) {
+    if !cfg!(target_os = "linux") {
+        return (true, "MockWiFi".to_string());
+    }
+
+    // Find the active Wi-Fi connection name from nmcli.
+    let output = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "NAME,TYPE", "connection", "show", "--active"])
+        .output();
+
+    let ssid = if let Ok(out) = output {
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        text.lines()
+            .find_map(|line| {
+                // -t format: NAME:TYPE — wifi rows are "802-11-wireless".
+                // Skip our own "Hotspot" connection — that's not real Wi-Fi.
+                let parts: Vec<&str> = line.splitn(2, ':').collect();
+                if parts.len() == 2 && parts[1] == "802-11-wireless" && parts[0] != "Hotspot" {
+                    Some(parts[0].to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // No active Wi-Fi connection → definitely not connected.
+    if ssid.is_empty() {
+        return (false, String::new());
+    }
+
+    // Active connection + internet reachable → green.
+    let internet = oobe_check_internet();
+    (internet, ssid)
+}
+
 fn oobe_scan_networks() -> Vec<(String, String)> {
     if cfg!(target_os = "linux") {
         let Ok(out) = std::process::Command::new("sudo")
@@ -1346,6 +1387,29 @@ async fn main() -> Result<(), slint::PlatformError> {
     #[cfg(target_os = "linux")]
     ui.window().set_fullscreen(true);
 
+    // ── Persistent Wi-Fi status indicator ─────────────────────────────────
+    // Polls nmcli + DNS every 5s on a background thread and pushes the result
+    // into the UI properties via the event loop. The indicator pill in the
+    // top-right of MainWindow binds directly to wifi-connected + wifi-ssid.
+    let ui_for_wifi = ui.as_weak();
+    tokio::spawn(async move {
+        loop {
+            let (connected, ssid) = tokio::task::spawn_blocking(check_wifi_status)
+                .await
+                .unwrap_or((false, String::new()));
+            let _ = slint::invoke_from_event_loop({
+                let h = ui_for_wifi.clone();
+                move || {
+                    if let Some(ui) = h.upgrade() {
+                        ui.set_wifi_connected(connected);
+                        ui.set_wifi_ssid(ssid.into());
+                    }
+                }
+            });
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+
     let spotify = Arc::new(SpotifyProvider::new());
     let player: Arc<Mutex<Option<Arc<LibrespotPlayer>>>> = Arc::new(Mutex::new(None));
 
@@ -1473,24 +1537,39 @@ async fn main() -> Result<(), slint::PlatformError> {
                     }
                 });
 
-                let result = if cfg!(target_os = "linux") {
+                // Build the nmcli arg list. We run via `sudo` because some
+                // adapters need root to (re)associate, and we have passwordless
+                // sudo for the kiosk user. Capture stderr so the UI can show
+                // the actual nmcli failure reason instead of just "Failed".
+                let (success, err_detail) = if cfg!(target_os = "linux") {
                     let mut args = vec!["nmcli", "device", "wifi", "connect", &ssid];
-                    if !password.is_empty() { args.extend_from_slice(&["password", &password]); }
-                    std::process::Command::new("nmcli")
-                        .args(&args)
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false)
+                    if !password.is_empty() {
+                        args.extend_from_slice(&["password", &password]);
+                    }
+                    match std::process::Command::new("sudo").args(&args).output() {
+                        Ok(out) if out.status.success() => (true, String::new()),
+                        Ok(out) => {
+                            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                            let detail = if !stderr.is_empty() { stderr } else { stdout };
+                            (false, detail)
+                        }
+                        Err(e) => (false, format!("nmcli invocation failed: {}", e)),
+                    }
                 } else {
                     println!("[settings] Simulating Wi-Fi connect to '{}' with password '{}'", ssid, password);
                     std::thread::sleep(std::time::Duration::from_secs(1));
-                    true
+                    (true, String::new())
                 };
 
-                let msg = if result {
+                let msg = if success {
                     format!("Connected to {}", ssid)
-                } else {
+                } else if err_detail.is_empty() {
                     format!("Failed to connect to {}", ssid)
+                } else {
+                    // Show the actual nmcli error so the user can diagnose
+                    // (wrong password, network not in range, etc.) without SSH.
+                    format!("Failed to connect to {}: {}", ssid, err_detail)
                 };
 
                 let _ = slint::invoke_from_event_loop({
