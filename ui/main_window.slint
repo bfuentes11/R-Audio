@@ -74,7 +74,9 @@ export component MainWindow inherits Window {
     // Spotify Pairing properties & callbacks
     in property <image> spotify-pairing-qr-code;
     in property <string> spotify-pairing-url: "http://r-audio.local:8888";
+    in property <string> spotify-pairing-status: "";
     callback spotify-cancel-pairing();
+    callback spotify-regenerate-pairing();
 
     // Spotify Accounts properties & callbacks
     in property <[UIAccount]> spotify-accounts: [];
@@ -601,8 +603,12 @@ export component MainWindow inherits Window {
             SpotifyPairing {
                 qr-code: root.spotify-pairing-qr-code;
                 pairing-url: root.spotify-pairing-url;
+                status: root.spotify-pairing-status;
                 cancel => {
                     root.spotify-cancel-pairing();
+                }
+                regenerate => {
+                    root.spotify-regenerate-pairing();
                 }
             }
         }

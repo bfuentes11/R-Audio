@@ -1,7 +1,9 @@
 export component SpotifyPairing {
     in property <image> qr-code;
     in property <string> pairing-url;
+    in property <string> status: "";
     callback cancel();
+    callback regenerate();
 
     // Centered glassmorphic card container
     Rectangle {
@@ -158,24 +160,62 @@ export component SpotifyPairing {
                     }
                 }
 
-                // Cancel Button
-                TouchArea {
-                    clicked => { root.cancel(); }
-                    
-                    Rectangle {
-                        height: 38px;
-                        background: #ffffff0a;
-                        border-width: 1px;
-                        border-color: #ffffff18;
-                        border-radius: 10px;
-                        
-                        Text {
-                            text: "Cancel Setup";
-                            color: #ffffff88;
-                            font-size: 13px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                // Status text (shown when there's something to say —
+                // "waiting", "connection lost", "PKCE error", etc.).
+                if root.status != "": Text {
+                    text: root.status;
+                    color: #ffaa88;
+                    font-size: 11px;
+                    font-weight: 500;
+                    wrap: word-wrap;
+                }
+
+                // Action buttons: "Get New QR" (regenerates session) +
+                // "Cancel Setup" (back out of pairing).
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    // Get New QR — regenerates session_id, busts stale PKCE.
+                    TouchArea {
+                        clicked => { root.regenerate(); }
+
+                        Rectangle {
+                            height: 38px;
+                            background: #1DB95418;
+                            border-width: 1px;
+                            border-color: #1DB95470;
+                            border-radius: 10px;
+
+                            Text {
+                                text: "Get New QR";
+                                color: #1DB954;
+                                font-size: 13px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Cancel — exits the pairing flow entirely.
+                    TouchArea {
+                        clicked => { root.cancel(); }
+
+                        Rectangle {
+                            height: 38px;
+                            background: #ffffff0a;
+                            border-width: 1px;
+                            border-color: #ffffff18;
+                            border-radius: 10px;
+
+                            Text {
+                                text: "Cancel Setup";
+                                color: #ffffff88;
+                                font-size: 13px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }

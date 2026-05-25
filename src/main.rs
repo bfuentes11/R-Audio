@@ -18,7 +18,10 @@ use crate::providers::spotify_player::LibrespotPlayer;
 // ---------------------------------------------------------------------------
 
 fn oobe_flag_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    // Fall back to /home/kiosk (the persistent kiosk user home), NOT /tmp —
+    // /tmp gets wiped on every reboot, which would cause the OOBE to re-run
+    // forever if HOME isn't set for whatever reason.
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/kiosk".to_string());
     std::path::PathBuf::from(home).join(".config").join("r-audio").join("setup-done")
 }
 
@@ -29,11 +32,23 @@ fn is_first_run() -> bool {
 fn mark_setup_complete() {
     let path = oobe_flag_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[oobe] Failed to create flag parent dir {:?}: {}", parent, e);
+        }
     }
-    let _ = std::fs::write(&path, "1");
-    println!("[oobe] Setup complete flag written.");
+    match std::fs::write(&path, "1") {
+        Ok(()) => println!("[oobe] Setup complete flag written at {:?}", path),
+        Err(e) => eprintln!("[oobe] FAILED to write setup-complete flag at {:?}: {}", path, e),
+    }
 }
+
+/// True if a pairing flow is already running. Prevents the duplicate
+/// /wait + /auth requests we were seeing in the Cloudflare worker logs
+/// when start_pairing_flow gets invoked from multiple code paths
+/// (oobe-skip-wifi, post-wifi-connect, open-spotify-provider, etc.) in
+/// rapid succession.
+static PAIRING_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Wait up to ~30s for NetworkManager to be active. Returns true if active.
 fn oobe_wait_for_nm() -> bool {
@@ -845,6 +860,21 @@ fn start_pairing_flow(
     player: Arc<Mutex<Option<Arc<LibrespotPlayer>>>>,
     go_next: impl Fn() + Clone + Send + 'static,
 ) {
+    use std::sync::atomic::Ordering;
+
+    // Guard: don't kick off a second concurrent pairing if one is already
+    // running. Multiple call sites (oobe-skip-wifi, post-Wi-Fi success,
+    // open-spotify-provider, regenerate button) could otherwise race and
+    // spawn duplicate SSE connections → duplicate /wait + /auth requests
+    // in the Cloudflare worker logs.
+    if PAIRING_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        println!("[main] Pairing already in progress — skipping duplicate start_pairing_flow call.");
+        return;
+    }
+
     let ui_ref = ui_handle.clone();
     let spotify_ref = Arc::clone(&spotify);
     let player_ref = Arc::clone(&player);
@@ -853,9 +883,12 @@ fn start_pairing_flow(
     tokio::spawn(async move {
         println!("[main] Launching Remote Pairing...");
 
-        // Generate session and pairing URL
+        // Fresh session_id on every (re)start — server-side PKCE verifier is
+        // tied to this UUID, so a stale UUID is what causes the "pkce
+        // verifier missing" error.
         let session_id = uuid::Uuid::new_v4().to_string();
         let pairing_url = format!("https://raudio.bryantfuentes.com/auth?session={}", session_id);
+        println!("[main] New pairing session_id: {}", session_id);
 
         // Generate QR code locally and instantaneously
         let slint_img_buf_opt = match qrcode_generator::to_png_to_vec(&pairing_url, qrcode_generator::QrCodeEcc::Low, 250) {
@@ -873,7 +906,8 @@ fn start_pairing_flow(
             }
         };
 
-        // Open pairing screen with the QR code already pre-loaded
+        // Open pairing screen with the QR code already pre-loaded and a
+        // fresh "waiting" status.
         let ui_clone = ui_ref.clone();
         let pairing_url_clone = pairing_url.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -884,6 +918,7 @@ fn start_pairing_flow(
                     None => slint::Image::default(),
                 };
                 ui.set_spotify_pairing_qr_code(qr_image);
+                ui.set_spotify_pairing_status("Waiting for you to scan and authorize on your phone…".into());
                 ui.set_active_view("spotify-pairing".into());
             }
         });
@@ -902,15 +937,40 @@ fn start_pairing_flow(
                 Ok(Ok(())) => {
                     println!("[main] Pairing completed successfully!");
                     mark_setup_complete();
+                    PAIRING_IN_PROGRESS.store(false, Ordering::SeqCst);
                     // No reboot needed: all packages were pre-installed during d-i
                     // and Plymouth is already configured. Go straight to the player.
                     run_authenticated_startup(ui_pairing, spotify_pairing, player_pairing, go_next_pairing, true).await;
                 }
                 Ok(Err(e)) => {
                     println!("[main] Pairing failed: {}", e);
+                    PAIRING_IN_PROGRESS.store(false, Ordering::SeqCst);
+                    let _ = slint::invoke_from_event_loop({
+                        let h = ui_pairing.clone();
+                        move || {
+                            if let Some(ui) = h.upgrade() {
+                                // Show the actual SSE/server error on screen so
+                                // the user knows whether to retry or troubleshoot.
+                                ui.set_spotify_pairing_status(
+                                    format!("Pairing failed: {}\n\nTap 'Get New QR' to try again.", e).into(),
+                                );
+                            }
+                        }
+                    });
                 }
                 Err(_) => {
                     println!("[main] Pairing channel closed.");
+                    PAIRING_IN_PROGRESS.store(false, Ordering::SeqCst);
+                    let _ = slint::invoke_from_event_loop({
+                        let h = ui_pairing.clone();
+                        move || {
+                            if let Some(ui) = h.upgrade() {
+                                ui.set_spotify_pairing_status(
+                                    "Pairing connection lost. Tap 'Get New QR' to try again.".into(),
+                                );
+                            }
+                        }
+                    });
                 }
             }
         });
@@ -2932,10 +2992,32 @@ async fn main() -> Result<(), slint::PlatformError> {
     ui.on_spotify_cancel_pairing({
         let ui_cancel = ui.as_weak();
         move || {
+            // Release the pairing guard so a future attempt can run.
+            PAIRING_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
             if let Some(ui) = ui_cancel.upgrade() {
+                ui.set_spotify_pairing_status("".into());
                 ui.set_active_view("home".into());
             }
         }
+    });
+
+    // --- REGENERATE PAIRING (user tapped "Get New QR") ---
+    // Bust the in-progress guard, throw away the stale session_id, kick off
+    // a fresh start_pairing_flow with a new UUID. Fixes "pkce verifier
+    // missing — session may have expired" caused by scanning a stale QR.
+    let ui_regen = ui_handle.clone();
+    let spotify_regen = Arc::clone(&spotify);
+    let player_regen = Arc::clone(&player);
+    let go_next_regen = go_next.clone();
+    ui.on_spotify_regenerate_pairing(move || {
+        println!("[main] User requested fresh pairing QR — regenerating session.");
+        PAIRING_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        start_pairing_flow(
+            ui_regen.clone(),
+            Arc::clone(&spotify_regen),
+            Arc::clone(&player_regen),
+            go_next_regen.clone(),
+        );
     });
 
     // --- OOBE: GET STARTED (welcome → wifi setup) ---
@@ -3133,15 +3215,30 @@ async fn main() -> Result<(), slint::PlatformError> {
 
     tokio::spawn(async move {
         if is_first_run() {
-            println!("[main] First run detected — launching OOBE.");
-            let _ = slint::invoke_from_event_loop({
-                let h = init_ui.clone();
-                move || {
-                    if let Some(ui) = h.upgrade() {
-                        ui.set_active_view("oobe-welcome".into());
+            println!("[main] First run detected.");
+
+            // If Wi-Fi is already connected (NetworkManager auto-restored a
+            // saved profile, or someone configured Wi-Fi manually), there's
+            // no need to drag the user through the QR-code hotspot flow.
+            // Skip straight to Spotify pairing.
+            let has_internet = tokio::task::spawn_blocking(oobe_check_internet)
+                .await
+                .unwrap_or(false);
+
+            if has_internet {
+                println!("[main] Internet already reachable — skipping Wi-Fi OOBE, going to Spotify pairing.");
+                start_pairing_flow(init_ui, init_spotify, init_player, go_next_clone);
+            } else {
+                println!("[main] No internet — showing Wi-Fi OOBE welcome screen.");
+                let _ = slint::invoke_from_event_loop({
+                    let h = init_ui.clone();
+                    move || {
+                        if let Some(ui) = h.upgrade() {
+                            ui.set_active_view("oobe-welcome".into());
+                        }
                     }
-                }
-            });
+                });
+            }
             return;
         }
 
