@@ -228,7 +228,10 @@ fn oobe_parse_form(body: &str) -> std::collections::HashMap<String, String> {
     map
 }
 
-fn oobe_start_http_server(tx: tokio::sync::mpsc::Sender<(String, String)>) {
+fn oobe_start_http_server(
+    tx: tokio::sync::mpsc::Sender<(String, String)>,
+    cached_networks: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+) {
     std::thread::spawn(move || {
         let server = match tiny_http::Server::http("0.0.0.0:8888") {
             Ok(s) => s,
@@ -238,14 +241,22 @@ fn oobe_start_http_server(tx: tokio::sync::mpsc::Sender<(String, String)>) {
         for mut req in server.incoming_requests() {
             let url = req.url().to_string();
             if url == "/wifi" || url == "/" {
-                let networks = oobe_scan_networks();
+                // Use the pre-hotspot scan results — once the adapter is in AP
+                // mode it can't see other networks.
+                let networks = cached_networks.lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
                 let mut options = String::new();
-                for (ssid, signal) in networks {
+                // Empty default option so the user must actively pick.
+                options.push_str("<option value=\"\" disabled selected>Select your Wi-Fi…</option>\n");
+                for (ssid, signal) in &networks {
                     let esc = ssid.replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;");
                     options.push_str(&format!(
                         "<option value=\"{esc}\">{esc} ({signal}%)</option>\n"
                     ));
                 }
+                // Manual-entry option for hidden SSIDs or networks the scan missed.
+                options.push_str("<option value=\"__manual__\">— Enter SSID manually —</option>\n");
                 let html = format!(r#"<!DOCTYPE html>
 <html>
 <head>
@@ -257,24 +268,34 @@ body{{background:linear-gradient(135deg,#102a4e 0%,#0a182d 100%);color:#fff;font
 h2{{margin-top:0;font-weight:800;color:#4b9beb;letter-spacing:1px}}
 p{{color:rgba(255,255,255,.7);font-size:14px;line-height:1.5}}
 .fg{{margin-bottom:20px}}
+.hint{{font-size:12px;color:rgba(255,255,255,.45);margin-top:6px}}
 label{{display:block;margin-bottom:8px;font-size:12px;font-weight:700;letter-spacing:1px;color:rgba(255,255,255,.5)}}
 select,input{{width:100%;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.2);color:#fff;font-size:16px;box-sizing:border-box}}
 button{{width:100%;padding:14px;border:none;border-radius:8px;background:#2b7bc5;color:#fff;font-weight:700;font-size:16px;cursor:pointer}}
 button:hover{{background:#4b9beb}}
+#manual_ssid{{display:none}}
 </style>
 </head>
 <body>
 <div class="card">
 <h2>R-Audio</h2>
 <p>Select your Wi-Fi network to connect this kiosk to the internet.</p>
-<form action="/connect" method="POST">
-<div class="fg"><label>WI-FI NETWORK</label><select name="ssid" required>{options}</select></div>
-<div class="fg"><label>PASSWORD</label><input type="password" name="password" placeholder="Leave blank if open"></div>
+<form action="/connect" method="POST" id="wifi_form">
+<div class="fg">
+  <label>WI-FI NETWORK</label>
+  <select name="ssid_pick" id="ssid_pick" required onchange="document.getElementById('manual_ssid').style.display = this.value === '__manual__' ? 'block' : 'none';">{options}</select>
+  <input type="text" id="manual_ssid" name="ssid_manual" placeholder="Network name (case sensitive)" autocomplete="off" autocapitalize="off">
+  <div class="hint">{net_count} network{plural} detected. Pick "Enter SSID manually" for hidden networks.</div>
+</div>
+<div class="fg"><label>PASSWORD</label><input type="password" name="password" placeholder="Leave blank if open" autocomplete="off"></div>
 <button type="submit">Connect</button>
 </form>
 </div>
 </body>
-</html>"#);
+</html>"#,
+                    options = options,
+                    net_count = networks.len(),
+                    plural = if networks.len() == 1 { "" } else { "s" });
                 let resp = tiny_http::Response::from_string(html).with_header(
                     tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap()
                 );
@@ -283,7 +304,17 @@ button:hover{{background:#4b9beb}}
                 let mut body = String::new();
                 if req.as_reader().read_to_string(&mut body).is_ok() {
                     let params = oobe_parse_form(&body);
-                    let ssid = params.get("ssid").cloned().unwrap_or_default();
+                    // The form has both a dropdown (ssid_pick) and a manual
+                    // text field (ssid_manual). If the user picked "Enter SSID
+                    // manually" the dropdown value is "__manual__" and the real
+                    // SSID is in ssid_manual; otherwise use the dropdown value.
+                    let pick = params.get("ssid_pick").cloned().unwrap_or_default();
+                    let manual = params.get("ssid_manual").cloned().unwrap_or_default();
+                    let ssid = if pick == "__manual__" || pick.is_empty() {
+                        manual
+                    } else {
+                        pick
+                    };
                     let password = params.get("password").cloned().unwrap_or_default();
                     let ack = tiny_http::Response::from_string(
                         r#"<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Connecting…</title>
@@ -335,8 +366,32 @@ async fn start_oobe_wifi(
                     None => slint::Image::default(),
                 };
                 ui.set_oobe_wifi_qr_code(qr_image);
-                ui.set_oobe_wifi_status("Starting hotspot…".into());
+                ui.set_oobe_wifi_status("Scanning for Wi-Fi networks…".into());
                 ui.set_active_view("oobe-wifi".into());
+            }
+        }
+    });
+
+    // ── Pre-scan Wi-Fi networks BEFORE bringing up the hotspot ─────────────
+    // Once the adapter goes into AP mode for the hotspot, it can't see other
+    // networks anymore — so we have to scan first and cache the list to serve
+    // from the web form later. Without this, the dropdown only shows the
+    // R-Audio-Setup hotspot itself.
+    let cached_networks = std::sync::Arc::new(std::sync::Mutex::new(
+        tokio::task::spawn_blocking(oobe_scan_networks)
+            .await
+            .unwrap_or_default(),
+    ));
+    {
+        let count = cached_networks.lock().map(|g| g.len()).unwrap_or(0);
+        println!("[oobe] Pre-hotspot scan found {} Wi-Fi network(s).", count);
+    }
+
+    let _ = slint::invoke_from_event_loop({
+        let h = ui_handle.clone();
+        move || {
+            if let Some(ui) = h.upgrade() {
+                ui.set_oobe_wifi_status("Starting hotspot…".into());
             }
         }
     });
@@ -374,7 +429,7 @@ async fn start_oobe_wifi(
     });
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, String)>(1);
-    oobe_start_http_server(tx);
+    oobe_start_http_server(tx, std::sync::Arc::clone(&cached_networks));
 
     while let Some((ssid, password)) = rx.recv().await {
         let _ = slint::invoke_from_event_loop({
