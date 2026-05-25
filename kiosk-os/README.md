@@ -2,13 +2,13 @@
 
 Bootable Debian **trixie** (13) ISO that turns a Surface Go 2 (or any x86_64 UEFI machine) into a dedicated R-Audio kiosk. Boots in under 10 seconds straight into a fullscreen Slint UI — no GNOME, no desktop environment, just bare X11 + openbox + the player.
 
-The ISO is built by **remastering the official Debian DVD1** (xorriso graft of our preseed + payload). No live-build, no Docker for the build itself, no initrd patching. The d-i install runs fully offline from the DVD pool; anything not on DVD1 is installed after Wi-Fi connects on first boot.
+The ISO is built by **remastering the official Debian DVD1** (xorriso graft of our preseed + payload + bundled `.deb` packages). The d-i install runs fully offline from the DVD pool; any package the kiosk needs that isn't on DVD1 is pre-fetched at build time (Docker, Debian trixie container resolves the full dep tree) and bundled into the ISO as a `.deb` cache. Postinstall installs them via `dpkg -i` — still no network needed. **This is the same approach FAI uses internally.**
 
 ---
 
 ## Boot Flow
 
-### First boot ever (from USB)
+### First boot ever (from USB) — fully unattended, fully offline
 ```
 [GRUB picks unattended entry, timeout 0, hidden]
      │
@@ -19,19 +19,27 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 [Auto-detects first disk (eMMC on Surface Go 2) ──► WIPES + partitions]
      │
      ▼
-[Installs minimal Debian + base kiosk deps from the DVD pool only — NO network]
+[d-i installs MINIMAL base from DVD1 pool (X11, NM, firmware, fonts)]
      │
      ▼
-[late_command → postinstall.sh: copies r-audio binaries, autologin, sudoers,
-                                stages Plymouth theme files for later]
+[late_command → postinstall.sh:
+   - Copies r-audio binaries + xinitrc + bash_profile
+   - dpkg -i ALL bundled .debs (openbox, plymouth, pulseaudio, onboard,
+                                 bluez-tools, libfontconfig1, libfreetype6,
+                                 libxkbcommon-x11-0, etc.)
+   - Stages + activates Plymouth Rust-logo theme
+   - update-initramfs + update-grub (splash takes effect on first real boot)]
      │
      ▼
-[d-i ejects USB, reboots into installed system]
+[d-i ejects USB, reboots into fully-equipped installed system]
 ```
 
-### First boot from internal disk (one-time OOBE)
+### First boot from internal disk — Wi-Fi + Spotify OOBE
 ```
-[autologin kiosk on tty1 → startx → r-audio launches in non-fullscreen]
+[Plymouth pulsing-Rust-logo splash → autologin → startx]
+     │
+     ▼
+[xinitrc starts openbox + onboard + r-audio FULLSCREEN]
      │
      ▼
 [r-audio detects first run → starts Wi-Fi hotspot "R-Audio-Setup"]
@@ -40,20 +48,15 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 [User scans QR, connects phone to hotspot, enters home Wi-Fi creds in web form]
      │
      ▼
-[r-audio connects to home Wi-Fi → runs /usr/local/bin/r-audio-install-packages
-                                    (apt-installs openbox, plymouth, pulseaudio,
-                                     onboard, bluez-tools, etc.)]
+[r-audio connects to home Wi-Fi → Spotify pairing QR flow]
      │
      ▼
-[Spotify pairing QR flow → mark setup complete → REBOOT]
+[User pairs Spotify → mark setup complete → straight to player (no reboot)]
 ```
 
 ### Every boot after that
 ```
-[Plymouth pulsing-Rust-logo splash → autologin → startx]
-     │
-     ▼
-[xinitrc starts openbox + onboard + r-audio fullscreen]
+[Plymouth splash → autologin → startx → openbox → r-audio]
      │
      ▼
 [r-audio loads cached Spotify token, goes straight to player]
@@ -65,10 +68,9 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 
 | File | Purpose |
 |---|---|
-| `build-iso.sh` | Downloads Debian DVD1 (or uses cache), runs xorriso to graft our payload onto it |
-| `preseed.cfg` | d-i answer file — fully unattended install with DVD-only package set |
-| `postinstall.sh` | Runs from preseed `late_command`; installs r-audio binaries, configures autologin, stages Plymouth theme |
-| `install-kiosk-packages.sh` | Apt-installs everything not on DVD1 — called by r-audio OOBE after Wi-Fi connects |
+| `build-iso.sh` | Downloads Debian DVD1, **pre-fetches extra .debs via Docker container**, runs xorriso to graft payload + debs onto the ISO |
+| `preseed.cfg` | d-i answer file — installs only minimal DVD1 base; everything else comes from bundled .debs |
+| `postinstall.sh` | Runs from preseed `late_command`; installs r-audio binaries, dpkg-installs bundled .debs, activates Plymouth theme |
 | `xinitrc` | X11 startup — runs openbox + onboard + r-audio-launcher |
 | `r-audio-launcher.sh` | Pre-flight connectivity check, then exec's r-audio |
 | `r-audio.service` | systemd unit (manual dev use only; the autologin/startx chain is the kiosk path) |
@@ -89,17 +91,18 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 - `firmware-misc-nonfree`, `firmware-iwlwifi`
 - `fonts-dejavu-core`
 
-**Not on DVD1 → apt-installed by `install-kiosk-packages.sh` after first-boot Wi-Fi:**
-- `openbox` — window manager (GNOME's DVD uses mutter, not openbox)
+**Pre-bundled into the ISO as `.debs` (build-iso.sh → Docker download → /r-audio-debs/ → postinstall.sh `dpkg -i`):**
+- `openbox` — window manager
 - `onboard` — touchscreen on-screen keyboard
-- `pulseaudio` — audio server (trixie's GNOME defaults to pipewire)
+- `pulseaudio` — audio server
 - `libavahi-compat-libdnssd1` — Bonjour compat lib for librespot
 - `bluez`, `bluez-tools` — Bluetooth stack + diagnostics
 - `iw`, `rfkill` — Wi-Fi diagnostics
 - `plymouth`, `plymouth-themes` — graphical boot splash
 - `xserver-xorg-legacy` — setuid X wrapper so non-root kiosk user can start X
+- `libfontconfig1`, `libfreetype6`, `libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, `libgles2`, `libgl1`, `libglib2.0-0`, `libssl3` — r-audio runtime libs
 
-**Rule:** if a package isn't in the GNOME-task dependency chain on DVD1, it goes in `install-kiosk-packages.sh`. Adding speculative packages to `preseed.cfg` breaks the "Select and install software" d-i step.
+**Why bundle instead of listing in preseed?** The d-i "Select and install software" step fails hard if even one package in `pkgsel/include` isn't on DVD1. We'd been playing whack-a-mole with that. Now `build-iso.sh` spins up a Debian trixie Docker container, runs `apt-get install --download-only` which uses apt's resolver to fetch the **complete dep tree**, and bakes every resulting `.deb` into the ISO. Postinstall runs `dpkg -i *.deb` to install them all offline. Same strategy FAI uses — never debug "is X on DVD1?" again.
 
 ---
 
@@ -208,7 +211,7 @@ The pulsing Rust logo lives at `plymouth-theme/`. Edit `r-audio.script` to tune 
 
 | Symptom | Likely cause |
 |---|---|
-| "Installation step failed — Select and install software" | A package in `preseed.cfg` pkgsel/include isn't on DVD1. Move it to `install-kiosk-packages.sh`. |
+| "Installation step failed — Select and install software" | A package in `preseed.cfg` pkgsel/include isn't on DVD1. Remove it from preseed and add it to the `KIOSK_PKGS` list in `build-iso.sh` (it'll be bundled as a `.deb` instead). |
 | Boot loop: terminal flashes then black, repeats | startx crashing; the modified `.bash_profile` now pauses with the error log visible — read it from the screen. |
 | OOBE shows but hotspot isn't visible from phone | `oobe_start_hotspot()` will display the actual nmcli error on the kiosk screen. Common causes: rfkill block, adapter doesn't support AP mode, NetworkManager not ready. |
 | Secure Boot error on Surface | Disable Secure Boot in UEFI (see flashing section above). |

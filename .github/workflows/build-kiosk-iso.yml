@@ -64,8 +64,9 @@ jobs:
 
       # ── 6. Remaster the Debian DVD into the R-Audio kiosk ISO ─────────────
       # build-iso.sh downloads the official Debian trixie DVD1 (or reuses the
-      # cached copy), then uses xorriso to graft in preseed.cfg, grub.cfg, and
-      # the R-Audio payload — no live-build, no Docker, no initrd patching.
+      # cached copy), pre-fetches the kiosk's extra .debs via a Debian trixie
+      # Docker container (no manual dep guessing), then uses xorriso to graft
+      # everything onto the ISO. No live-build, no initrd patching.
       - name: Build Kiosk ISO
         working-directory: kiosk-os
         run: sudo bash build-iso.sh

@@ -82,15 +82,11 @@ fn oobe_start_hotspot() -> Result<(), String> {
     }
 
     // 2. Unblock rfkill (some firmware boots with a soft block on Wi-Fi).
-    //    rfkill isn't on Debian DVD1 — it's installed by r-audio-install-packages
-    //    after Wi-Fi connects, so this is a best-effort no-op on first boot.
-    if std::path::Path::new("/usr/sbin/rfkill").exists()
-        || std::path::Path::new("/usr/bin/rfkill").exists()
-    {
-        let _ = std::process::Command::new("sudo")
-            .args(["rfkill", "unblock", "wifi"])
-            .status();
-    }
+    //    rfkill is bundled in the ISO's .debs and installed during d-i, so
+    //    it's available from the very first boot.
+    let _ = std::process::Command::new("sudo")
+        .args(["rfkill", "unblock", "wifi"])
+        .status();
 
     // 3. Make sure NetworkManager's radio is on.
     let _ = std::process::Command::new("sudo")

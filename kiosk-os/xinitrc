@@ -8,10 +8,8 @@ xset s noblank
 xset -dpms
 
 # Start a window manager so X11 honors EWMH fullscreen hints from Slint.
-# openbox is installed by r-audio-install-packages after Wi-Fi connects, so
-# on FIRST BOOT there is no WM available. The OOBE Slint window won't be
-# fullscreen on first boot — that's accepted as a cosmetic one-time issue.
-# Every reboot after the OOBE completes has openbox and runs fullscreen.
+# openbox is installed via the bundled .debs during d-i postinstall, so it's
+# available from the very first boot — no special first-boot handling needed.
 if command -v openbox-session >/dev/null 2>&1; then
     openbox-session &
 fi
