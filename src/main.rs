@@ -810,29 +810,8 @@ fn start_pairing_flow(
                 Ok(Ok(())) => {
                     println!("[main] Pairing completed successfully!");
                     mark_setup_complete();
-
-                    // If this was a first-run OOBE (package install script was present),
-                    // reboot so openbox + pulseaudio (just installed) take effect cleanly.
-                    let needs_reboot = std::path::Path::new("/usr/local/bin/r-audio-install-packages").exists()
-                        && cfg!(target_os = "linux");
-                    if needs_reboot {
-                        let _ = slint::invoke_from_event_loop({
-                            let h = ui_pairing.clone();
-                            move || {
-                                if let Some(ui) = h.upgrade() {
-                                    ui.set_oobe_wifi_status("Setup complete! Rebooting…".into());
-                                    ui.set_active_view("oobe-wifi".into());
-                                }
-                            }
-                        });
-                        println!("[main] First-run setup complete. Rebooting to apply kiosk packages.");
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                        let _ = std::process::Command::new("sudo")
-                            .args(["reboot"])
-                            .status();
-                        return;
-                    }
-
+                    // No reboot needed: all packages were pre-installed during d-i
+                    // and Plymouth is already configured. Go straight to the player.
                     run_authenticated_startup(ui_pairing, spotify_pairing, player_pairing, go_next_pairing, true).await;
                 }
                 Ok(Err(e)) => {
