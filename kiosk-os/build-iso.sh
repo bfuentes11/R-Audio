@@ -131,22 +131,8 @@ mkdir -p "$DEBS_DIR"
 
 # Packages the kiosk needs that aren't on Debian DVD1, plus any r-audio
 # runtime libs we want to bundle defensively.
-KIOSK_PKGS="
-    openbox
-    onboard
-    pulseaudio
-    libavahi-compat-libdnssd1
-    bluez bluez-tools
-    iw rfkill
-    plymouth plymouth-themes
-    xserver-xorg-legacy
-    libfontconfig1
-    libfreetype6
-    libxkbcommon0 libxkbcommon-x11-0
-    libegl1 libgles2 libgl1
-    libglib2.0-0
-    libssl3
-"
+# Must be ONE line — newlines in the value break the `bash -c` string below.
+KIOSK_PKGS="openbox onboard pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill plymouth plymouth-themes xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libssl3"
 
 # shellcheck disable=SC2086
 docker run --rm \
@@ -154,8 +140,7 @@ docker run --rm \
     debian:trixie-slim bash -c "
         set -e
         apt-get update -qq
-        DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            --no-install-recommends --download-only $KIOSK_PKGS
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --download-only $KIOSK_PKGS
         cp /var/cache/apt/archives/*.deb /debs/
         echo \"Downloaded \$(ls /debs/ | wc -l) .deb files (\$(du -sh /debs/ | cut -f1) total)\"
     "
