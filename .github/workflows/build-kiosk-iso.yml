@@ -54,10 +54,36 @@ jobs:
             wget \
             librsvg2-bin
 
-      # ── 5. Compile R-Audio binaries ────────────────────────────────────────
+      # ── 4b. Cache compiled R-Audio binaries ───────────────────────────────
+      # When iterating on kiosk-os/* files only, the Rust binaries don't change
+      # and we can skip the ~5-10 min cargo build entirely. Cache key covers
+      # everything that affects the final binary output.
+      - name: Cache release binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/x86_64-unknown-linux-gnu/release/R-Audio
+            target/x86_64-unknown-linux-gnu/release/r-audio-setup
+          key: r-audio-bins-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'build.rs', 'src/**', 'ui/**', 'material-1.0/**') }}
+
+      # ── 4c. Cache the bundled .deb packages ───────────────────────────────
+      # build-iso.sh's Docker step downloads ~500 MB of .debs (openbox,
+      # plymouth, pulseaudio, etc.) every run. Cache them, keyed on
+      # build-iso.sh so any package-list change busts the cache automatically.
+      - name: Cache bundled .deb packages
+        uses: actions/cache@v4
+        with:
+          path: ~/r-audio-debs-cache
+          key: r-audio-debs-${{ hashFiles('kiosk-os/build-iso.sh') }}
+
+      # ── 5. Compile R-Audio binaries (skipped on cache hit) ────────────────
       - name: Build release binaries
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Stage binaries where build-iso.sh expects them
         run: |
-          cargo build --release --target x86_64-unknown-linux-gnu
           mkdir -p target/release
           cp target/x86_64-unknown-linux-gnu/release/R-Audio       target/release/R-Audio
           cp target/x86_64-unknown-linux-gnu/release/r-audio-setup target/release/r-audio-setup
@@ -65,11 +91,14 @@ jobs:
       # ── 6. Remaster the Debian DVD into the R-Audio kiosk ISO ─────────────
       # build-iso.sh downloads the official Debian trixie DVD1 (or reuses the
       # cached copy), pre-fetches the kiosk's extra .debs via a Debian trixie
-      # Docker container (no manual dep guessing), then uses xorriso to graft
-      # everything onto the ISO. No live-build, no initrd patching.
+      # Docker container (or reuses the cached .debs at ~/r-audio-debs-cache),
+      # then uses xorriso to graft everything onto the ISO.
+      # sudo -E preserves R_AUDIO_DEBS_CACHE so build-iso.sh can find the cache.
       - name: Build Kiosk ISO
         working-directory: kiosk-os
-        run: sudo bash build-iso.sh
+        env:
+          R_AUDIO_DEBS_CACHE: /home/runner/r-audio-debs-cache
+        run: sudo -E bash build-iso.sh
         timeout-minutes: 45
 
       # ── 7. Setup rclone & Upload to OneDrive ─────────────────────────────

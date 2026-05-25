@@ -134,16 +134,31 @@ mkdir -p "$DEBS_DIR"
 # Must be ONE line — newlines in the value break the `bash -c` string below.
 KIOSK_PKGS="openbox onboard pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill plymouth plymouth-themes xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libssl3"
 
-# shellcheck disable=SC2086
-docker run --rm \
-    -v "$(realpath "$DEBS_DIR")":/debs \
-    debian:trixie-slim bash -c "
-        set -e
-        apt-get update -qq
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --download-only $KIOSK_PKGS
-        cp /var/cache/apt/archives/*.deb /debs/
-        echo \"Downloaded \$(ls /debs/ | wc -l) .deb files (\$(du -sh /debs/ | cut -f1) total)\"
-    "
+# Check for a pre-populated cache (used by CI to skip the docker download).
+# Set R_AUDIO_DEBS_CACHE to a directory path to enable.
+if [ -n "${R_AUDIO_DEBS_CACHE:-}" ] && [ -d "$R_AUDIO_DEBS_CACHE" ] && \
+   ls "$R_AUDIO_DEBS_CACHE"/*.deb >/dev/null 2>&1; then
+    echo "  Using cached .debs from $R_AUDIO_DEBS_CACHE ($(ls "$R_AUDIO_DEBS_CACHE" | wc -l) files)"
+    cp "$R_AUDIO_DEBS_CACHE"/*.deb "$DEBS_DIR/"
+else
+    # shellcheck disable=SC2086
+    docker run --rm \
+        -v "$(realpath "$DEBS_DIR")":/debs \
+        debian:trixie-slim bash -c "
+            set -e
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --download-only $KIOSK_PKGS
+            cp /var/cache/apt/archives/*.deb /debs/
+            echo \"Downloaded \$(ls /debs/ | wc -l) .deb files (\$(du -sh /debs/ | cut -f1) total)\"
+        "
+
+    # If a cache dir was specified, populate it for the next run.
+    if [ -n "${R_AUDIO_DEBS_CACHE:-}" ]; then
+        echo "  Populating cache at $R_AUDIO_DEBS_CACHE"
+        mkdir -p "$R_AUDIO_DEBS_CACHE"
+        cp "$DEBS_DIR"/*.deb "$R_AUDIO_DEBS_CACHE/"
+    fi
+fi
 
 # ------------------------------------------------------------------------------
 # Bake the Plymouth theme: swap the SVG's black strokes to white (so it shows
