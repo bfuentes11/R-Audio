@@ -109,13 +109,56 @@ cp r-audio.service             "$WORK_DIR/payload/r-audio.service"
 cp r-audio.env.template        "$WORK_DIR/payload/r-audio.env"
 cp xinitrc                     "$WORK_DIR/payload/xinitrc"
 cp postinstall.sh              "$WORK_DIR/payload/postinstall.sh"
-cp install-kiosk-packages.sh   "$WORK_DIR/payload/install-kiosk-packages.sh"
 chmod +x \
     "$WORK_DIR/payload/r-audio" \
     "$WORK_DIR/payload/r-audio-setup" \
     "$WORK_DIR/payload/r-audio-launcher" \
-    "$WORK_DIR/payload/postinstall.sh" \
-    "$WORK_DIR/payload/install-kiosk-packages.sh"
+    "$WORK_DIR/payload/postinstall.sh"
+
+# ------------------------------------------------------------------------------
+# Pre-fetch the full dependency tree of every package the kiosk needs beyond
+# what d-i installs from DVD1. We spin up a Debian trixie container so the
+# package versions exactly match the target's, then apt-download every .deb
+# (and recursive deps) into the ISO's payload at /r-audio-debs/. postinstall.sh
+# later runs `dpkg -i` on the whole pile during install — fully offline.
+#
+# This is the same strategy FAI uses internally: resolve deps at build time
+# on a known-good environment, ship the resulting .debs.
+# ------------------------------------------------------------------------------
+echo "Pre-fetching extra .deb packages with complete dependency tree..."
+DEBS_DIR="$WORK_DIR/payload/r-audio-debs"
+mkdir -p "$DEBS_DIR"
+
+# Packages the kiosk needs that aren't on Debian DVD1, plus any r-audio
+# runtime libs we want to bundle defensively.
+KIOSK_PKGS="
+    openbox
+    onboard
+    pulseaudio
+    libavahi-compat-libdnssd1
+    bluez bluez-tools
+    iw rfkill
+    plymouth plymouth-themes
+    xserver-xorg-legacy
+    libfontconfig1
+    libfreetype6
+    libxkbcommon0 libxkbcommon-x11-0
+    libegl1 libgles2 libgl1
+    libglib2.0-0
+    libssl3
+"
+
+# shellcheck disable=SC2086
+docker run --rm \
+    -v "$(realpath "$DEBS_DIR")":/debs \
+    debian:trixie-slim bash -c "
+        set -e
+        apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends --download-only $KIOSK_PKGS
+        cp /var/cache/apt/archives/*.deb /debs/
+        echo \"Downloaded \$(ls /debs/ | wc -l) .deb files (\$(du -sh /debs/ | cut -f1) total)\"
+    "
 
 # ------------------------------------------------------------------------------
 # Bake the Plymouth theme: swap the SVG's black strokes to white (so it shows

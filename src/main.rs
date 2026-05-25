@@ -408,37 +408,10 @@ async fn start_oobe_wifi(
         }).await.unwrap_or(false);
 
         if connected {
-            println!("[oobe] Wi-Fi connected. Installing kiosk packages before Spotify pairing.");
-
-            // ── Install packages not on the Debian DVD (openbox, pulseaudio, etc.) ──
-            // This only runs on the very first boot. On subsequent runs is_first_run()
-            // is false so start_oobe_wifi is never called.
-            let pkg_script = std::path::Path::new("/usr/local/bin/r-audio-install-packages");
-            if pkg_script.exists() {
-                let _ = slint::invoke_from_event_loop({
-                    let h = ui_handle.clone();
-                    move || {
-                        if let Some(ui) = h.upgrade() {
-                            ui.set_oobe_wifi_status("Installing kiosk software… (2–3 min)".into());
-                        }
-                    }
-                });
-
-                let install_result = tokio::task::spawn_blocking(|| {
-                    std::process::Command::new("sudo")
-                        .arg("/usr/local/bin/r-audio-install-packages")
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false)
-                }).await.unwrap_or(false);
-
-                if install_result {
-                    println!("[oobe] Kiosk packages installed successfully.");
-                } else {
-                    println!("[oobe] Package install failed or script not found — continuing anyway.");
-                }
-            }
-
+            println!("[oobe] Wi-Fi connected. Proceeding to Spotify pairing.");
+            // All kiosk packages were installed offline during d-i from the
+            // bundled .debs on the ISO, so no post-Wi-Fi package install is
+            // needed — straight to Spotify pairing.
             let _ = slint::invoke_from_event_loop({
                 let h = ui_handle.clone();
                 move || {

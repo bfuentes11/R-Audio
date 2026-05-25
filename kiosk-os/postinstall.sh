@@ -16,14 +16,12 @@ set -e
 PAYLOAD=/target/tmp/r-audio-payload
 
 echo "[postinstall] Installing R-Audio binaries..."
-cp "$PAYLOAD/r-audio"                  /target/usr/local/bin/r-audio
-cp "$PAYLOAD/r-audio-setup"            /target/usr/local/bin/r-audio-setup
-cp "$PAYLOAD/r-audio-launcher"         /target/usr/local/bin/r-audio-launcher
-cp "$PAYLOAD/install-kiosk-packages.sh" /target/usr/local/bin/r-audio-install-packages
+cp "$PAYLOAD/r-audio"          /target/usr/local/bin/r-audio
+cp "$PAYLOAD/r-audio-setup"    /target/usr/local/bin/r-audio-setup
+cp "$PAYLOAD/r-audio-launcher" /target/usr/local/bin/r-audio-launcher
 chmod +x /target/usr/local/bin/r-audio \
          /target/usr/local/bin/r-audio-setup \
-         /target/usr/local/bin/r-audio-launcher \
-         /target/usr/local/bin/r-audio-install-packages
+         /target/usr/local/bin/r-audio-launcher
 
 echo "[postinstall] Installing systemd unit and environment file..."
 cp "$PAYLOAD/r-audio.service" /target/etc/systemd/system/r-audio.service
@@ -99,16 +97,56 @@ echo "[postinstall] Enabling network and mDNS services..."
 in-target systemctl enable avahi-daemon
 in-target systemctl enable NetworkManager
 
-echo "[postinstall] Staging R-Audio Plymouth theme assets..."
-# Plymouth itself isn't on the Debian DVD1 — it's apt-installed by
-# r-audio-install-packages after Wi-Fi connects. We pre-stage the theme files
-# now so they're already in place when Plymouth installs and gets activated.
+# ──────────────────────────────────────────────────────────────────────────────
+# Install the bundled .deb packages (no network required).
+# build-iso.sh pre-fetched the complete dep tree on a Debian trixie container
+# so every package + transitive dep is in /target/tmp/r-audio-payload/r-audio-debs/.
+# Calling `dpkg -i` on all of them at once lets dpkg figure out the install
+# order via its internal dep graph.
+# ──────────────────────────────────────────────────────────────────────────────
+echo "[postinstall] Installing bundled .deb packages (offline)..."
+mkdir -p /target/var/cache/r-audio-debs
+cp "$PAYLOAD"/r-audio-debs/*.deb /target/var/cache/r-audio-debs/
+
+# --auto-deconfigure handles installing in dep order; -E skips already-installed.
+# We don't `set -e` around this because some postinst scripts (plymouth, openbox)
+# can emit non-fatal warnings that would trip set -e.
+in-target sh -c 'dpkg -i --auto-deconfigure /var/cache/r-audio-debs/*.deb' || {
+    echo "[postinstall] WARNING: dpkg -i reported issues; some packages may have unmet deps."
+    echo "[postinstall] Continuing — the kiosk will still boot and you can investigate post-install."
+}
+
+# Clean up the deb cache once installed.
+rm -rf /target/var/cache/r-audio-debs
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plymouth: stage the R-Audio theme files (pulsing Rust logo) and activate.
+# Plymouth was just installed by the dpkg step above, so all the plymouth-*
+# tools and the /usr/share/plymouth/themes/ directory exist now.
+# ──────────────────────────────────────────────────────────────────────────────
+echo "[postinstall] Installing R-Audio Plymouth boot splash theme..."
 mkdir -p /target/usr/share/plymouth/themes/r-audio
 cp "$PAYLOAD/plymouth-theme/r-audio.plymouth" /target/usr/share/plymouth/themes/r-audio/r-audio.plymouth
 cp "$PAYLOAD/plymouth-theme/r-audio.script"   /target/usr/share/plymouth/themes/r-audio/r-audio.script
 cp "$PAYLOAD/plymouth-theme/rust-logo.png"    /target/usr/share/plymouth/themes/r-audio/rust-logo.png
 
-# Clean up the payload copy so the installed system isn't carrying it around
+# Activate the theme and add `splash` to kernel cmdline.
+sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 vt.global_cursor_default=0"|' /target/etc/default/grub
+in-target plymouth-set-default-theme r-audio || echo "[postinstall] Plymouth theme activation deferred."
+
+# Rebuild initramfs so Plymouth ships in the early boot stage, and update
+# GRUB to pick up the new cmdline. Takes effect on the very first real boot.
+in-target update-initramfs -u
+in-target update-grub
+
+# X wrapper config — allow non-root kiosk user to start X with proper iopl.
+mkdir -p /target/etc/X11
+cat > /target/etc/X11/Xwrapper.config <<'EOF'
+allowed_users=anybody
+needs_root_rights=yes
+EOF
+
+# Clean up the payload copy so the installed system isn't carrying it around.
 rm -rf "$PAYLOAD" /target/tmp/postinstall.sh
 
-echo "[postinstall] Done. System will reboot into the kiosk on next boot."
+echo "[postinstall] Done. System will reboot into the fully-equipped kiosk."
