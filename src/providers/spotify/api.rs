@@ -161,7 +161,10 @@ impl SpotifyApiService {
     pub async fn get_user_playlists(&self) -> Result<Vec<Track>, String> {
         let access_token = self.auth.get_access_token().await?;
 
-        let url = "https://api.spotify.com/v1/me/playlists";
+        // Spotify's /me/playlists endpoint default limit is 20; max is 50.
+        // We request the max explicitly so users with 20+ playlists see them
+        // all on the dashboard.
+        let url = "https://api.spotify.com/v1/me/playlists?limit=50";
         
         let res = self.client.clone()
             .get(url)

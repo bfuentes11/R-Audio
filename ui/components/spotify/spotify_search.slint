@@ -122,10 +122,14 @@ export component SpotifySearch inherits Rectangle {
         Rectangle { height: 10px; }
 
         // --- Results List ---
-        ScrollView {
+        // Flickable + viewport-height (matches dashboard pattern).
+        // ScrollView wouldn't drag-scroll on touch in this context.
+        Flickable {
             vertical-stretch: 1;
             min-height: 0px;
-            VerticalLayout {
+            viewport-height: search-results-list.preferred-height;
+            viewport-width: self.width;
+            search-results-list := VerticalLayout {
                 spacing: 0px;
                 for track[index] in root.search-results : Rectangle {
                     height: 68px;

@@ -540,11 +540,15 @@ export component PlayerBar inherits Rectangle {
                     letter-spacing: 1px;
                 }
 
-                ScrollView {
+                // Flickable + viewport-height for reliable touch-drag scrolling
+                // (ScrollView wouldn't drag-scroll inside the add-to-playlist modal).
+                Flickable {
                     vertical-stretch: 1;
                     min-height: 0px;
+                    viewport-height: add-to-playlist-list.preferred-height;
+                    viewport-width: self.width;
 
-                    VerticalLayout {
+                    add-to-playlist-list := VerticalLayout {
                         spacing: 8px;
                         for p in root.playlists: playlist-item := TouchArea {
                             height: 48px;

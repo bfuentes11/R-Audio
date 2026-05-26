@@ -60,10 +60,14 @@ export component SpotifyArtist {
                 horizontal-stretch: 60;
                 vertical-stretch: 1;
 
-                ScrollView {
+                // Flickable + viewport-height (matches dashboard pattern).
+                // ScrollView wouldn't drag-scroll on touch in this nested layout.
+                Flickable {
                     vertical-stretch: 1;
                     min-height: 0px;
-                    VerticalLayout {
+                    viewport-height: artist-left-column.preferred-height;
+                    viewport-width: self.width;
+                    artist-left-column := VerticalLayout {
                         // Skeleton loader
                         if root.is-loading: VerticalLayout {
                             spacing: 8px;

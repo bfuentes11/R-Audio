@@ -196,6 +196,45 @@ fn oobe_check_internet() -> bool {
         .unwrap_or(false)
 }
 
+/// Returns (percent, charging). percent is -1 if no battery is detected
+/// (e.g., desktop install, or sysfs entry missing). Reads the first BAT*
+/// device under /sys/class/power_supply/.
+fn check_battery_status() -> (i32, bool) {
+    if !cfg!(target_os = "linux") {
+        return (-1, false);
+    }
+    // Glob /sys/class/power_supply for entries starting with "BAT".
+    let entries = match std::fs::read_dir("/sys/class/power_supply") {
+        Ok(d) => d,
+        Err(_) => return (-1, false),
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("BAT") {
+            continue;
+        }
+        let path = entry.path();
+        let cap_str = std::fs::read_to_string(path.join("capacity")).ok();
+        let status_str = std::fs::read_to_string(path.join("status")).ok();
+
+        let percent = cap_str
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .unwrap_or(-1);
+        let charging = status_str
+            .map(|s| {
+                let t = s.trim();
+                t == "Charging" || t == "Full"
+            })
+            .unwrap_or(false);
+
+        if percent >= 0 {
+            return (percent, charging);
+        }
+    }
+    (-1, false)
+}
+
 /// Returns (is_connected, ssid). is_connected is true only if there's an
 /// active Wi-Fi connection AND internet is reachable (so the indicator
 /// reflects actual reachability, not just association).
@@ -1447,22 +1486,29 @@ async fn main() -> Result<(), slint::PlatformError> {
     #[cfg(target_os = "linux")]
     ui.window().set_fullscreen(true);
 
-    // ── Persistent Wi-Fi status indicator ─────────────────────────────────
-    // Polls nmcli + DNS every 5s on a background thread and pushes the result
-    // into the UI properties via the event loop. The indicator pill in the
-    // top-right of MainWindow binds directly to wifi-connected + wifi-ssid.
-    let ui_for_wifi = ui.as_weak();
+    // ── Persistent status bar poller (Wi-Fi + battery) ────────────────────
+    // Single background task that reads nmcli/DNS + /sys/class/power_supply
+    // every 5s and pushes both into the UI via the event loop. The status
+    // pill at the top of MainWindow binds to wifi-* and battery-* properties.
+    let ui_for_status = ui.as_weak();
     tokio::spawn(async move {
         loop {
-            let (connected, ssid) = tokio::task::spawn_blocking(check_wifi_status)
+            let (wifi_connected, ssid, battery_percent, battery_charging) =
+                tokio::task::spawn_blocking(|| {
+                    let (c, s) = check_wifi_status();
+                    let (p, ch) = check_battery_status();
+                    (c, s, p, ch)
+                })
                 .await
-                .unwrap_or((false, String::new()));
+                .unwrap_or((false, String::new(), -1, false));
             let _ = slint::invoke_from_event_loop({
-                let h = ui_for_wifi.clone();
+                let h = ui_for_status.clone();
                 move || {
                     if let Some(ui) = h.upgrade() {
-                        ui.set_wifi_connected(connected);
+                        ui.set_wifi_connected(wifi_connected);
                         ui.set_wifi_ssid(ssid.into());
+                        ui.set_battery_percent(battery_percent);
+                        ui.set_battery_charging(battery_charging);
                     }
                 }
             });
@@ -2787,13 +2833,33 @@ async fn main() -> Result<(), slint::PlatformError> {
     });
     
     // --- VOLUME ---
+    // Fires from BOTH the on-screen slider AND the Surface Go 2's hardware
+    // volume side-buttons (intercepted in MainWindow's FocusScope). We update
+    // librespot's per-player volume AND the system PulseAudio master sink,
+    // so the keys work even before music has started playing.
     let player_vol = Arc::clone(&player);
     ui.on_player_change_volume(move |vol| {
         let p = Arc::clone(&player_vol);
         tokio::spawn(async move {
+            // librespot's volume (only effective when a player is active).
             let p_lock = p.lock().await;
             if let Some(ref active_player) = *p_lock {
                 active_player.set_volume(vol).await;
+            }
+            drop(p_lock);
+
+            // Also nudge the system master volume so the keys feel responsive
+            // even at idle. pactl ships with pulseaudio which is in our
+            // bundled .debs. Format: "set-sink-volume @DEFAULT_SINK@ 80%".
+            #[cfg(target_os = "linux")]
+            {
+                let percent = (vol.clamp(0.0, 1.0) * 100.0).round() as u32;
+                let pct_arg = format!("{}%", percent);
+                let _ = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new("pactl")
+                        .args(["set-sink-volume", "@DEFAULT_SINK@", &pct_arg])
+                        .status()
+                }).await;
             }
         });
     });

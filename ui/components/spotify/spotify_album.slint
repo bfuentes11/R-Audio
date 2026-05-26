@@ -59,10 +59,16 @@ export component SpotifyAlbum {
                 horizontal-stretch: 60;
                 vertical-stretch: 1;
 
-                ScrollView {
+                // Flickable matches the working pattern in spotify_dashboard.
+                // ScrollView from std-widgets doesn't handle touch drag
+                // reliably inside nested HorizontalLayout / vertical-stretch
+                // contexts, which is why the album tracklist wouldn't scroll.
+                Flickable {
                     vertical-stretch: 1;
                     min-height: 0px;
-                    VerticalLayout {
+                    viewport-height: album-track-list.preferred-height;
+                    viewport-width: self.width;
+                    album-track-list := VerticalLayout {
                         spacing: 0px;
 
                         // === THE SKELETON LOADER ===
@@ -226,10 +232,12 @@ export component SpotifyAlbum {
                 alignment: start;
                 spacing: 15px;
 
-                // Album Art
+                // Album Art — sized to match artist photo proportions so the
+                // PlayerBar never gets pushed off-screen (was 400×400 which
+                // overflowed on smaller heights, including Surface Go 2).
                 Rectangle {
-                    width: 400px;
-                    height: 400px;
+                    width: 280px;
+                    height: 280px;
                     border-radius: 12px;
                     clip: true;
                     background: #282828;
