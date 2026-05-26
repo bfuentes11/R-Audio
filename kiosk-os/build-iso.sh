@@ -116,6 +116,38 @@ chmod +x \
     "$WORK_DIR/payload/postinstall.sh"
 
 # ------------------------------------------------------------------------------
+# Inject sensitive runtime secrets from the build environment.
+#
+# r-audio.env.template ships ONLY non-sensitive defaults (client IDs,
+# redirect URIs, Slint settings). The actual secrets are injected here at
+# build time from env vars sourced from GitHub Actions secrets (or local
+# `export` for off-CI builds). This keeps secrets out of git while still
+# baking them into the offline ISO.
+#
+# Required (or warned) for full functionality:
+#   SPOTIFY_APP_SECRET     — X-App-Secret header for the Cloudflare worker
+#                            on /auth, /wait, /callback. 401 if missing.
+#   RSPOTIFY_CLIENT_SECRET — Spotify app's OAuth client secret. Required for
+#                            librespot/rspotify token refresh.
+#   LASTFM_API_KEY         — Last.fm API key for autoplay recommendations.
+# ------------------------------------------------------------------------------
+inject_secret() {
+    local name="$1"
+    local value="$2"
+    if [ -n "$value" ]; then
+        echo "  Injecting $name into baked r-audio.env"
+        echo "${name}=${value}" >> "$WORK_DIR/payload/r-audio.env"
+    else
+        echo "  WARNING: $name not set — kiosk will be missing this credential."
+    fi
+}
+
+echo "Injecting runtime secrets into r-audio.env..."
+inject_secret SPOTIFY_APP_SECRET     "${SPOTIFY_APP_SECRET:-}"
+inject_secret RSPOTIFY_CLIENT_SECRET "${RSPOTIFY_CLIENT_SECRET:-}"
+inject_secret LASTFM_API_KEY         "${LASTFM_API_KEY:-}"
+
+# ------------------------------------------------------------------------------
 # Pre-fetch the full dependency tree of every package the kiosk needs beyond
 # what d-i installs from DVD1. We spin up a Debian trixie container so the
 # package versions exactly match the target's, then apt-download every .deb

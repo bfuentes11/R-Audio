@@ -98,6 +98,17 @@ jobs:
         working-directory: kiosk-os
         env:
           R_AUDIO_DEBS_CACHE: /home/runner/r-audio-debs-cache
+          # ── Runtime secrets baked into the kiosk's /etc/default/r-audio ────
+          # All three are injected by build-iso.sh's `inject_secret` calls
+          # and never written into the repo. r-audio-launcher.sh sources
+          # /etc/default/r-audio before exec'ing r-audio, so std::env::var
+          # picks them up at runtime.
+          # X-App-Secret header for the Cloudflare worker (auth + SSE).
+          SPOTIFY_APP_SECRET: ${{ secrets.SPOTIFY_APP_SECRET }}
+          # Spotify OAuth client secret for token refresh.
+          RSPOTIFY_CLIENT_SECRET: ${{ secrets.RSPOTIFY_CLIENT_SECRET }}
+          # Last.fm API key for autoplay recommendations.
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
         run: sudo -E bash build-iso.sh
         timeout-minutes: 45
 
