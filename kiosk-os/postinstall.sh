@@ -128,10 +128,15 @@ echo "[postinstall] Installing R-Audio Plymouth boot splash theme..."
 mkdir -p /target/usr/share/plymouth/themes/r-audio
 cp "$PAYLOAD/plymouth-theme/r-audio.plymouth" /target/usr/share/plymouth/themes/r-audio/r-audio.plymouth
 cp "$PAYLOAD/plymouth-theme/r-audio.script"   /target/usr/share/plymouth/themes/r-audio/r-audio.script
-cp "$PAYLOAD/plymouth-theme/rust-logo.png"    /target/usr/share/plymouth/themes/r-audio/rust-logo.png
+cp "$PAYLOAD/plymouth-theme/raudio-logo.png"    /target/usr/share/plymouth/themes/r-audio/raudio-logo.png
 
 # Activate the theme and add `splash` to kernel cmdline.
-sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 vt.global_cursor_default=0"|' /target/etc/default/grub
+sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=0 rd.systemd.show_status=false rd.udev.log_level=3 vt.global_cursor_default=0 fbcon=nodefer"|' /target/etc/default/grub
+
+# Completely hide the GRUB menu
+sed -i 's|^GRUB_TIMEOUT=.*|GRUB_TIMEOUT=0|' /target/etc/default/grub
+echo 'GRUB_TIMEOUT_STYLE=hidden' >> /target/etc/default/grub
+echo 'GRUB_HIDDEN_TIMEOUT=0' >> /target/etc/default/grub
 in-target plymouth-set-default-theme r-audio || echo "[postinstall] Plymouth theme activation deferred."
 
 # Rebuild initramfs so Plymouth ships in the early boot stage, and update

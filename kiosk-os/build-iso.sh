@@ -200,9 +200,7 @@ echo "Rendering Plymouth Rust-logo PNG from SVG..."
 mkdir -p "$WORK_DIR/payload/plymouth-theme"
 cp plymouth-theme/r-audio.plymouth "$WORK_DIR/payload/plymouth-theme/r-audio.plymouth"
 cp plymouth-theme/r-audio.script   "$WORK_DIR/payload/plymouth-theme/r-audio.script"
-sed 's/stroke="black"/stroke="white"/g; s/fill="black"/fill="white"/g' \
-    plymouth-theme/rust-logo.svg \
-    | rsvg-convert -w 400 -h 400 -o "$WORK_DIR/payload/plymouth-theme/rust-logo.png"
+rsvg-convert -w 400 -h 400 -o "$WORK_DIR/payload/plymouth-theme/raudio-logo.png" plymouth-theme/RAudioLogo.svg
 
 # Preseed (placed at the ISO root — d-i reads it as /cdrom/preseed.cfg)
 cp preseed.cfg "$WORK_DIR/preseed.cfg"
