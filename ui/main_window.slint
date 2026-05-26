@@ -981,20 +981,25 @@ export component MainWindow inherits Window {
             }
             // ── Hardware volume buttons (Surface Go 2 side keys) ───────────
             // X11/openbox forwards XF86 audio keys to the focused window as
-            // Slint Key.AudioVolume{Up,Down,Mute}. Each Key.X is a special
-            // Unicode private-use char, so the comparison must be against the
-            // Key constant — *not* the literal string "AudioVolumeUp".
-            if (event.text == Key.AudioVolumeUp) {
+            // Slint Key.Volume{Up,Down,Mute}. Each Key.X is a special Unicode
+            // private-use char, so the comparison must be against the Key
+            // constant — *not* the literal string "VolumeUp".
+            //
+            // Note: Slint's Key enum names these `Volume*` (not `AudioVolume*`
+            // as Qt does), even though they originate from the same XF86 key
+            // codes. Don't confuse them with the `Audio*` constants, which
+            // refer to media-transport keys (rewind, forward, play, etc.).
+            if (event.text == Key.VolumeUp) {
                 root.player-volume = min(1.0, root.player-volume + 0.05);
                 root.player-change-volume(root.player-volume);
                 return accept;
             }
-            if (event.text == Key.AudioVolumeDown) {
+            if (event.text == Key.VolumeDown) {
                 root.player-volume = max(0.0, root.player-volume - 0.05);
                 root.player-change-volume(root.player-volume);
                 return accept;
             }
-            if (event.text == Key.AudioVolumeMute) {
+            if (event.text == Key.VolumeMute) {
                 // Mute = jump to 0. The user can press Up again to restore.
                 root.player-volume = 0.0;
                 root.player-change-volume(0.0);
