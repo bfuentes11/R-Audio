@@ -904,17 +904,17 @@ export component MainWindow inherits Window {
             // player-volume property (so the slider moves visually) and emit
             // the same callback the slider uses, so librespot + system
             // audio stay in sync.
-            if (event.text == Key.AudioVolumeUp) {
+            if (event.text == "AudioVolumeUp") {
                 root.player-volume = min(1.0, root.player-volume + 0.05);
                 root.player-change-volume(root.player-volume);
                 return accept;
             }
-            if (event.text == Key.AudioVolumeDown) {
+            if (event.text == "AudioVolumeDown") {
                 root.player-volume = max(0.0, root.player-volume - 0.05);
                 root.player-change-volume(root.player-volume);
                 return accept;
             }
-            if (event.text == Key.AudioVolumeMute) {
+            if (event.text == "AudioVolumeMute") {
                 // Mute = jump to 0. The user can press Up again to restore.
                 root.player-volume = 0.0;
                 root.player-change-volume(0.0);
