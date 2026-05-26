@@ -21,6 +21,26 @@ export component FullPlayer inherits Rectangle {
     callback remove-from-liked-songs(string);
     callback collapse();
 
+    // ── Controls auto-hide ────────────────────────────────────────────────
+    // The control "island" (seek bar + transport buttons + volume) fades
+    // out after 10 s of no interaction, or immediately when the user taps
+    // an empty area. Tapping again brings it back for another 10 s. The
+    // album art naturally re-centers because the controls' wrapper shrinks
+    // its height to 0, and the VerticalLayout has `alignment: center`.
+    property <bool> controls-visible: true;
+    property <float> controls-alpha: root.controls-visible ? 1.0 : 0.0;
+    animate controls-alpha {
+        duration: 280ms;
+        easing: ease-out;
+    }
+    controls-timer := Timer {
+        interval: 10s;
+        running: root.controls-visible;
+        triggered => {
+            root.controls-visible = false;
+        }
+    }
+
     // Dark fallback — visible before any album is loaded, and as the base layer
     background: @linear-gradient(180deg, #160d26fa 0%, #08040dfd 100%);
 
@@ -32,10 +52,17 @@ export component FullPlayer inherits Rectangle {
         image-fit: fill;
     }
 
-    // Intercept touch/click events to prevent leakage to elements behind the player
+    // Intercept touch/click events to prevent leakage to elements behind the
+    // player, AND act as the toggle for the controls island. Any tap that
+    // doesn't hit a button (collapse, like, play/pause, seek, volume) falls
+    // through to this area and flips controls-visible — restarting the 10 s
+    // auto-hide timer when re-showing.
     TouchArea {
         width: 100%;
         height: 100%;
+        clicked => {
+            root.controls-visible = !root.controls-visible;
+        }
         // --- BACKGROUND MUSIC SPECTRUM ---
         HorizontalLayout {
             alignment: space-around;
@@ -184,10 +211,20 @@ export component FullPlayer inherits Rectangle {
         }
         
         // Premium Floating Control Console
+        // The outer wrapper's height shrinks to 0 when controls are hidden;
+        // the VerticalLayout containing it (alignment: center) then re-centers
+        // the album art and track info downward as the height animates. `clip`
+        // hides the inner island as it gets cut off mid-animation.
         Rectangle {
             width: 100%;
-            height: 138px;
-            
+            height: root.controls-visible ? 138px : 0px;
+            opacity: root.controls-alpha;
+            clip: true;
+            animate height {
+                duration: 320ms;
+                easing: ease-out;
+            }
+
             Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;

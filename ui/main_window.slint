@@ -38,6 +38,28 @@ export component MainWindow inherits Window {
     in-out property <string> active-view: "home";
     in-out property <bool> player-expanded: false;
 
+    // ── Status pill auto-hide ─────────────────────────────────────────────
+    // The Wi-Fi/battery pill shows for 5 s on startup or whenever the user
+    // taps/drags down from the top edge of the screen, then quietly fades
+    // out. Keeps the brand surface (R·Audio title on home, album art on
+    // playback views) uncluttered without removing access to status info.
+    property <bool> pill-visible: true;
+    property <float> pill-alpha: root.pill-visible ? 1.0 : 0.0;
+    animate pill-alpha {
+        duration: 280ms;
+        easing: ease-out;
+    }
+    pill-timer := Timer {
+        // Runs only while the pill is showing; when triggered, it sets
+        // pill-visible = false, which flips `running` to false (stopping
+        // the timer). Re-shows restart the 5 s countdown from scratch.
+        interval: 5s;
+        running: root.pill-visible;
+        triggered => {
+            root.pill-visible = false;
+        }
+    }
+
     // ── Boot splash ───────────────────────────────────────────────────────
     // Rust sets boot-done = true once startup checks finish. The internal
     // boot-overlay-alpha binding reacts to that change, and the animate block
@@ -497,13 +519,17 @@ export component MainWindow inherits Window {
         }
 
         // --- SPOTIFY DASHBOARD ---
-        if active-view == "spotify-dashboard": VerticalLayout {
+        if active-view == "spotify-dashboard": Rectangle {
             vertical-stretch: 1;
-            padding-top: 12px;
-            padding-bottom: 12px;
-            padding-left: 20px;
-            padding-right: 20px;
-            SpotifyDashboard {
+            VerticalLayout {
+                width: 100%;
+                height: 100%;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                padding-left: 20px;
+                padding-right: 20px;
+                SpotifyDashboard {
+                    vertical-stretch: 1;
                 is-loading: root.spotify-is-loading;
                 user-name: root.spotify-user-name;
                 recent-tracks: root.spotify-recent-tracks;
@@ -532,6 +558,7 @@ export component MainWindow inherits Window {
                 }
                 logout => {
                     root.spotify-logout-account(root.spotify-user-name)
+                }
                 }
             }
         }
@@ -564,48 +591,62 @@ export component MainWindow inherits Window {
         }
 
         // --- SPOTIFY ALBUM VIEW ---
-        if active-view == "spotify-album": VerticalLayout {
+        // Wrapper is a Rectangle (not VerticalLayout) so it deterministically
+        // fills its allocated height — otherwise short albums (few tracks)
+        // collapse the wrapper to content size and the PlayerBar floats up
+        // into the middle of the screen.
+        if active-view == "spotify-album": Rectangle {
             vertical-stretch: 1;
-            padding-top: 12px;
-            padding-bottom: 12px;
-            padding-left: 20px;
-            padding-right: 20px;
-            SpotifyAlbum {
-                album-title: root.spotify-album-title;
-                album-artist: root.spotify-album-artist;
-                album-cover: root.spotify-album-cover;
-                tracks: root.spotify-album-tracks;
-                is-loading: root.spotify-album-is-loading;
-                go-back => {
-                    root.active-view = "spotify-dashboard"
-                }
-                play-track(id) => {
-                    root.play-track(id)
+            VerticalLayout {
+                width: 100%;
+                height: 100%;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                padding-left: 20px;
+                padding-right: 20px;
+                SpotifyAlbum {
+                    vertical-stretch: 1;
+                    album-title: root.spotify-album-title;
+                    album-artist: root.spotify-album-artist;
+                    album-cover: root.spotify-album-cover;
+                    tracks: root.spotify-album-tracks;
+                    is-loading: root.spotify-album-is-loading;
+                    go-back => {
+                        root.active-view = "spotify-dashboard"
+                    }
+                    play-track(id) => {
+                        root.play-track(id)
+                    }
                 }
             }
         }
 
         // --- SPOTIFY ARTIST VIEW ---
-        if active-view == "spotify-artist": VerticalLayout {
+        if active-view == "spotify-artist": Rectangle {
             vertical-stretch: 1;
-            padding-top: 12px;
-            padding-bottom: 12px;
-            padding-left: 20px;
-            padding-right: 20px;
-            SpotifyArtist {
-                artist-name: root.spotify-artist-name;
-                artist-photo: root.spotify-artist-photo;
-                top-tracks: root.spotify-artist-top-tracks;
-                albums: root.spotify-artist-albums;
-                is-loading: root.spotify-artist-is-loading;
-                go-back => {
-                    root.active-view = "spotify-dashboard"
-                }
-                play-track(id) => {
-                    root.play-track(id)
-                }
-                open-artist-album(id) => {
-                    root.open-album-by-id(id)
+            VerticalLayout {
+                width: 100%;
+                height: 100%;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                padding-left: 20px;
+                padding-right: 20px;
+                SpotifyArtist {
+                    vertical-stretch: 1;
+                    artist-name: root.spotify-artist-name;
+                    artist-photo: root.spotify-artist-photo;
+                    top-tracks: root.spotify-artist-top-tracks;
+                    albums: root.spotify-artist-albums;
+                    is-loading: root.spotify-artist-is-loading;
+                    go-back => {
+                        root.active-view = "spotify-dashboard"
+                    }
+                    play-track(id) => {
+                        root.play-track(id)
+                    }
+                    open-artist-album(id) => {
+                        root.open-album-by-id(id)
+                    }
                 }
             }
         }
@@ -656,8 +697,12 @@ export component MainWindow inherits Window {
             }
         }
 
-        // PlayerBar at the bottom of the VerticalLayout
-        if root.player-track-title != "": PlayerBar {
+        // PlayerBar at the bottom of the VerticalLayout.
+        // Hidden on the home/landing page — its provider cards already fill
+        // the screen on the Surface Go 2 and the player bar pushes the
+        // "R·Audio" title up under the status pill. Playback controls remain
+        // one tap away via the Spotify provider card → dashboard.
+        if root.player-track-title != "" && root.active-view != "home": PlayerBar {
             is-playing: root.player-is-playing;
             track-title: root.player-track-title;
             track-artist: root.player-track-artist;
@@ -759,6 +804,8 @@ export component MainWindow inherits Window {
     // Combined Wi-Fi + battery pill, centered at the top so it doesn't
     // collide with back/search buttons in any view (those sit in corners).
     // Both indicators are bound to properties updated by the Rust pollers.
+    // Auto-hides after 5 s via pill-timer; tap or swipe down on the top
+    // strip brings it back.
     Rectangle {
         x: (root.width - self.width) / 2;
         y: 6px;
@@ -768,6 +815,7 @@ export component MainWindow inherits Window {
         background: #00000060;
         border-width: 1px;
         border-color: #ffffff20;
+        opacity: root.pill-alpha;
 
         HorizontalLayout {
             padding-left: 12px;
@@ -897,6 +945,26 @@ export component MainWindow inherits Window {
         }
     }
 
+    // ── Top-edge reveal zone for the status pill ──────────────────────────
+    // Only `enabled` while the pill is hidden, so it doesn't intercept
+    // back-button / search-button presses in views during normal use.
+    // Either a tap or a small downward drag at the top brings the pill
+    // back for another 5 s.
+    if !root.pill-visible: TouchArea {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 28px;
+        clicked => {
+            root.pill-visible = true;
+        }
+        moved => {
+            if self.pressed && (self.mouse-y - self.pressed-y) > 6px {
+                root.pill-visible = true;
+            }
+        }
+    }
+
     FocusScope {
         enabled: true;
         init => {
@@ -913,21 +981,20 @@ export component MainWindow inherits Window {
             }
             // ── Hardware volume buttons (Surface Go 2 side keys) ───────────
             // X11/openbox forwards XF86 audio keys to the focused window as
-            // Slint Key.AudioVolume{Up,Down,Mute}. We update the in-out
-            // player-volume property (so the slider moves visually) and emit
-            // the same callback the slider uses, so librespot + system
-            // audio stay in sync.
-            if (event.text == "AudioVolumeUp") {
+            // Slint Key.AudioVolume{Up,Down,Mute}. Each Key.X is a special
+            // Unicode private-use char, so the comparison must be against the
+            // Key constant — *not* the literal string "AudioVolumeUp".
+            if (event.text == Key.AudioVolumeUp) {
                 root.player-volume = min(1.0, root.player-volume + 0.05);
                 root.player-change-volume(root.player-volume);
                 return accept;
             }
-            if (event.text == "AudioVolumeDown") {
+            if (event.text == Key.AudioVolumeDown) {
                 root.player-volume = max(0.0, root.player-volume - 0.05);
                 root.player-change-volume(root.player-volume);
                 return accept;
             }
-            if (event.text == "AudioVolumeMute") {
+            if (event.text == Key.AudioVolumeMute) {
                 // Mute = jump to 0. The user can press Up again to restore.
                 root.player-volume = 0.0;
                 root.player-change-volume(0.0);

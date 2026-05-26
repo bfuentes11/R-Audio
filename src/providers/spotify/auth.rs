@@ -218,6 +218,46 @@ impl SpotifyAuthManager {
         let guard = token_arc.lock().await.ok()?;
         guard.as_ref()?.expires_at
     }
+
+    /// Force a token refresh regardless of whether the current token is expired,
+    /// and return the freshly-minted access token. Used by the pre-emptive
+    /// reconnect path so a rebuilt librespot session gets a token with a full
+    /// ~60 min of validity (rather than the same near-expiry token, which would
+    /// just trigger another reconnect — and another mid-song pause — minutes
+    /// later when it actually expires).
+    pub async fn force_refresh_token(&self) -> Result<String, String> {
+        // 1. Trigger the refresh via the rspotify client. This uses the stored
+        //    refresh_token grant, which is valid regardless of access-token age.
+        {
+            let client = self.client.lock().await;
+            client.refresh_token().await
+                .map_err(|e| format!("rspotify refresh_token failed: {}", e))?;
+        }
+
+        // 2. Read the freshly-refreshed token out.
+        let token_arc = {
+            let client = self.client.lock().await;
+            client.get_token()
+        };
+        let token_guard = token_arc.lock().await
+            .map_err(|_| "Failed to lock token after refresh".to_string())?;
+        let token = token_guard.as_ref()
+            .ok_or_else(|| "No access token available after refresh".to_string())?;
+
+        // 3. Persist to the on-disk multi-user cache so a restart picks up
+        //    the new token instead of trying to use the dead one.
+        let active_opt = self.active_user.lock().await.clone();
+        if let Some(active) = active_opt {
+            let mut cache = Self::load_multi_cache();
+            if let Some(user_profile) = cache.users.get_mut(&active) {
+                user_profile.token = token.clone();
+                Self::save_multi_cache(&cache);
+                println!("[auth] Force-refreshed token saved to cache for '{}'", active);
+            }
+        }
+
+        Ok(token.access_token.clone())
+    }
 }
 
 /// Helper to start the remote pairing process and stream via SSE from the Cloudflare Worker

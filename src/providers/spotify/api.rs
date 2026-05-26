@@ -250,8 +250,8 @@ impl SpotifyApiService {
         
         let first_page = &json["tracks"];
         let total_tracks = first_page["total"].as_u64().unwrap_or(0);
-        let limit = first_page["limit"].as_u64().unwrap_or(100);
-        let items_per_page = if limit == 0 { 100 } else { limit };
+        let limit = first_page["limit"].as_u64().unwrap_or(20);
+        let items_per_page = if limit == 0 { 20 } else { limit };
 
         println!("[api] Playlist total tracks: {}, limit: {}", total_tracks, items_per_page);
 

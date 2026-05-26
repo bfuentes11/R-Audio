@@ -840,7 +840,19 @@ fn initialize_audio_player(
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             }
 
-            match spotify_provider.get_access_token().await {
+            // On a *pre-emptive* reconnect we must force-refresh the token
+            // (the existing one still has ~5 min validity, so the lazy
+            // `get_access_token` would skip the refresh and hand back the
+            // same near-dead token — defeating the whole point of going
+            // around the loop). On a `SessionLost` the token may already be
+            // expired anyway, but force_refresh is safe and idempotent so
+            // we use it for both paths.
+            let refresh_result = if preempt_triggered {
+                spotify_provider.auth.force_refresh_token().await
+            } else {
+                spotify_provider.get_access_token().await
+            };
+            match refresh_result {
                 Ok(t) => token = t,
                 Err(e) => {
                     println!("[main] Reconnect failed — token error: {} — giving up", e);
@@ -3321,26 +3333,17 @@ async fn main() -> Result<(), slint::PlatformError> {
             tokio::time::sleep(std::time::Duration::from_millis(SPLASH_MIN_MS - elapsed_ms)).await;
         }
 
-        // ── Fade the boot splash out ──────────────────────────────────────
-        let _ = slint::invoke_from_event_loop({
-            let h = init_ui.clone();
-            move || {
-                if let Some(ui) = h.upgrade() {
-                    ui.set_boot_done(true);
-                }
-            }
-        });
-        // Wait for the Slint 500ms fade-out animation to finish before
-        // switching views, so the real UI is never visible underneath a
-        // partially-transparent splash.
-        tokio::time::sleep(std::time::Duration::from_millis(550)).await;
-
-        // ── Navigate to the correct first view ────────────────────────────
+        // ── Switch to the correct view UNDER the splash, *then* fade ──────
+        // Order matters: if we fade first, the user sees the default "home"
+        // view (provider-selection page) flash through behind the half-faded
+        // splash before the OOBE or dashboard view actually loads. Switching
+        // first means the right view is already rendered under the opaque
+        // splash when the fade begins, so the cross-dissolve is seamless.
         if first_run {
             println!("[main] First run detected.");
             if has_internet {
                 println!("[main] Internet already reachable — skipping Wi-Fi OOBE, going to Spotify pairing.");
-                start_pairing_flow(init_ui, init_spotify, init_player, go_next_clone);
+                start_pairing_flow(init_ui.clone(), init_spotify.clone(), init_player.clone(), go_next_clone.clone());
             } else {
                 println!("[main] No internet — showing Wi-Fi OOBE welcome screen.");
                 let _ = slint::invoke_from_event_loop({
@@ -3352,14 +3355,26 @@ async fn main() -> Result<(), slint::PlatformError> {
                     }
                 });
             }
-            return;
-        }
-
-        if is_valid {
-            run_authenticated_startup(init_ui, init_spotify, init_player, go_next_clone, false).await;
+        } else if is_valid {
+            run_authenticated_startup(init_ui.clone(), init_spotify.clone(), init_player.clone(), go_next_clone.clone(), false).await;
         } else {
             println!("[main] Session is invalid/empty. User is on home/landing screen.");
         }
+
+        // Give Slint one tick to apply the view switch + any pending UI
+        // bindings before we start the fade, so there's no race where the
+        // splash starts dissolving while the new view is still mid-mount.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // ── Fade the boot splash out ──────────────────────────────────────
+        let _ = slint::invoke_from_event_loop({
+            let h = init_ui.clone();
+            move || {
+                if let Some(ui) = h.upgrade() {
+                    ui.set_boot_done(true);
+                }
+            }
+        });
     });
 
     // --- OPEN SPOTIFY PROVIDER CALLBACK ---
