@@ -1,5 +1,4 @@
 import { ScrollView, VerticalBox } from "std-widgets.slint";
-import { TextManip } from "globals.slint";
 import { ProviderCard } from "components/provider_card.slint";
 import {
     SpotifySearch,
@@ -25,7 +24,7 @@ import {
 } from "components/settings.slint";
 import { BootSplash } from "components/boot_splash.slint";
 
-export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice, TextManip }
+export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice }
 
 export component MainWindow inherits Window {
     preferred-width: 800px;
@@ -126,6 +125,13 @@ export component MainWindow inherits Window {
     callback search-music(string);
     callback backspace-pressed(string) -> string;
     callback play-track(string);
+
+    // ── On-screen keyboard (onboard) show/hide ─────────────────────────────
+    // Settings and Search forward TextInput focus changes to this callback,
+    // which the Rust side translates into D-Bus Show/Hide calls against
+    // org.onboard.Onboard.Keyboard. The Slint VirtualKeyboard component is
+    // no longer used; onboard handles all on-screen typing.
+    callback request-keyboard(bool);
     callback load-more();
     callback open-album(string);
     callback open-playlist(string, string);
@@ -515,6 +521,7 @@ export component MainWindow inherits Window {
                 scan-bluetooth => { root.settings-scan-bluetooth(); }
                 connect-bluetooth(mac) => { root.settings-connect-bluetooth(mac); }
                 backspace-pressed(s) => { root.backspace-pressed(s) }
+                request-keyboard(show) => { root.request-keyboard(show); }
             }
         }
 
@@ -587,66 +594,63 @@ export component MainWindow inherits Window {
                 open-artist(id) => {
                     root.open-artist(id)
                 }
+                request-keyboard(show) => { root.request-keyboard(show); }
             }
         }
 
         // --- SPOTIFY ALBUM VIEW ---
-        // Wrapper is a Rectangle (not VerticalLayout) so it deterministically
-        // fills its allocated height — otherwise short albums (few tracks)
-        // collapse the wrapper to content size and the PlayerBar floats up
-        // into the middle of the screen.
+        // The component is positioned absolutely inside the wrapper Rectangle
+        // (explicit x/y/width/height) instead of being placed inside a
+        // VerticalLayout. That sidesteps the layout-propagation problem we
+        // hit with short albums: VerticalBox + nested HorizontalLayout were
+        // sometimes sizing to content rather than filling, leaving empty
+        // space below and floating the PlayerBar mid-screen. Forcing the
+        // instance to `parent.height - 24px` guarantees it always fills.
         if active-view == "spotify-album": Rectangle {
             vertical-stretch: 1;
-            VerticalLayout {
-                width: 100%;
-                height: 100%;
-                padding-top: 12px;
-                padding-bottom: 12px;
-                padding-left: 20px;
-                padding-right: 20px;
-                SpotifyAlbum {
-                    vertical-stretch: 1;
-                    album-title: root.spotify-album-title;
-                    album-artist: root.spotify-album-artist;
-                    album-cover: root.spotify-album-cover;
-                    tracks: root.spotify-album-tracks;
-                    is-loading: root.spotify-album-is-loading;
-                    go-back => {
-                        root.active-view = "spotify-dashboard"
-                    }
-                    play-track(id) => {
-                        root.play-track(id)
-                    }
+            SpotifyAlbum {
+                x: 20px;
+                y: 12px;
+                width:  parent.width  - 40px;
+                height: parent.height - 24px;
+                album-title: root.spotify-album-title;
+                album-artist: root.spotify-album-artist;
+                album-cover: root.spotify-album-cover;
+                tracks: root.spotify-album-tracks;
+                is-loading: root.spotify-album-is-loading;
+                go-back => {
+                    root.active-view = "spotify-dashboard"
+                }
+                play-track(id) => {
+                    root.play-track(id)
                 }
             }
         }
 
         // --- SPOTIFY ARTIST VIEW ---
+        // Same explicit-positioning treatment as the album view above, for
+        // the same reason (artist pages with few top-tracks / albums were
+        // exhibiting the same PlayerBar-floats-up symptom).
         if active-view == "spotify-artist": Rectangle {
             vertical-stretch: 1;
-            VerticalLayout {
-                width: 100%;
-                height: 100%;
-                padding-top: 12px;
-                padding-bottom: 12px;
-                padding-left: 20px;
-                padding-right: 20px;
-                SpotifyArtist {
-                    vertical-stretch: 1;
-                    artist-name: root.spotify-artist-name;
-                    artist-photo: root.spotify-artist-photo;
-                    top-tracks: root.spotify-artist-top-tracks;
-                    albums: root.spotify-artist-albums;
-                    is-loading: root.spotify-artist-is-loading;
-                    go-back => {
-                        root.active-view = "spotify-dashboard"
-                    }
-                    play-track(id) => {
-                        root.play-track(id)
-                    }
-                    open-artist-album(id) => {
-                        root.open-album-by-id(id)
-                    }
+            SpotifyArtist {
+                x: 20px;
+                y: 12px;
+                width:  parent.width  - 40px;
+                height: parent.height - 24px;
+                artist-name: root.spotify-artist-name;
+                artist-photo: root.spotify-artist-photo;
+                top-tracks: root.spotify-artist-top-tracks;
+                albums: root.spotify-artist-albums;
+                is-loading: root.spotify-artist-is-loading;
+                go-back => {
+                    root.active-view = "spotify-dashboard"
+                }
+                play-track(id) => {
+                    root.play-track(id)
+                }
+                open-artist-album(id) => {
+                    root.open-album-by-id(id)
                 }
             }
         }
@@ -698,11 +702,21 @@ export component MainWindow inherits Window {
         }
 
         // PlayerBar at the bottom of the VerticalLayout.
-        // Hidden on the home/landing page — its provider cards already fill
-        // the screen on the Surface Go 2 and the player bar pushes the
-        // "R·Audio" title up under the status pill. Playback controls remain
-        // one tap away via the Spotify provider card → dashboard.
-        if root.player-track-title != "" && root.active-view != "home": PlayerBar {
+        //
+        // Hidden on:
+        //   • "home"           — provider cards already fill the screen and
+        //                        the bar would push the R·Audio title under
+        //                        the status pill.
+        //   • "spotify-search" — the on-screen keyboard takes the bottom
+        //                        ~half of the screen, so a player bar below
+        //                        it has nowhere to live without overlapping
+        //                        results or being hidden by the keyboard.
+        //
+        // Playback controls remain one tap away by navigating back to the
+        // dashboard/album/artist view.
+        if root.player-track-title != ""
+           && root.active-view != "home"
+           && root.active-view != "spotify-search": PlayerBar {
             is-playing: root.player-is-playing;
             track-title: root.player-track-title;
             track-artist: root.player-track-artist;

@@ -734,12 +734,63 @@ fn apply_volume_key(ui_handle: &slint::Weak<MainWindow>, key: VolumeKey) {
     });
 }
 
+/// Shared held-state for the volume keys. Surface Go 2 hardware buttons emit
+/// only press (val=1) and release (val=0) events through the platform driver —
+/// no kernel-level autorepeat — so a held button looks like a single press to
+/// userspace. We track press/release here and a dedicated ramp thread polls
+/// these atomics to fire continuous volume changes while either key is held.
+#[cfg(target_os = "linux")]
+struct VolHoldState {
+    up_held:   std::sync::atomic::AtomicBool,
+    down_held: std::sync::atomic::AtomicBool,
+}
+
 #[cfg(target_os = "linux")]
 fn spawn_volume_key_listener(ui_handle: slint::Weak<MainWindow>) {
-    // Open every input device that advertises any of the three volume keys
-    // — usually that's the platform "Power Button" / "Surface ACPI" node,
-    // but a USB keyboard with media keys would also match. Each device gets
-    // its own blocking reader thread so a slow device can't starve another.
+    use std::sync::atomic::Ordering;
+
+    let state = std::sync::Arc::new(VolHoldState {
+        up_held:   std::sync::atomic::AtomicBool::new(false),
+        down_held: std::sync::atomic::AtomicBool::new(false),
+    });
+
+    // ── Hold-to-ramp ticker ───────────────────────────────────────────────
+    // Idle (cheap 40 ms polling) until a button goes down; then wait an
+    // initial delay before ramping at ~11 Hz while held. The first volume
+    // change is fired immediately by the event reader on the press event;
+    // this ticker only handles the *subsequent* increments. Initial delay
+    // prevents a single tap from generating two volume changes.
+    {
+        let state = std::sync::Arc::clone(&state);
+        let ui = ui_handle.clone();
+        std::thread::spawn(move || {
+            const INITIAL_DELAY_MS: u64 = 400;
+            const REPEAT_MS:        u64 = 90;
+            loop {
+                // Idle wait
+                while !state.up_held.load(Ordering::Relaxed)
+                   && !state.down_held.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                }
+                // Press latency before the ramp kicks in
+                std::thread::sleep(std::time::Duration::from_millis(INITIAL_DELAY_MS));
+                // Ramp while held. If the user releases mid-delay, the loop
+                // condition catches it and we drop back to idle without
+                // firing any extra change.
+                while state.up_held.load(Ordering::Relaxed)
+                   || state.down_held.load(Ordering::Relaxed) {
+                    if state.up_held.load(Ordering::Relaxed) {
+                        apply_volume_key(&ui, VolumeKey::Up);
+                    } else if state.down_held.load(Ordering::Relaxed) {
+                        apply_volume_key(&ui, VolumeKey::Down);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(REPEAT_MS));
+                }
+            }
+        });
+    }
+
+    // ── Device enumeration + per-device event readers ─────────────────────
     std::thread::spawn(move || {
         // Give udev a moment to populate /dev/input on cold boots.
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -762,7 +813,8 @@ fn spawn_volume_key_listener(ui_handle: slint::Weak<MainWindow>) {
         }
 
         for (path, mut device) in devices {
-            let ui = ui_handle.clone();
+            let ui    = ui_handle.clone();
+            let state = std::sync::Arc::clone(&state);
             std::thread::spawn(move || {
                 let name = device.name().unwrap_or("").to_string();
                 println!("[volkeys] Listening on {:?} ({})", path, name);
@@ -770,28 +822,35 @@ fn spawn_volume_key_listener(ui_handle: slint::Weak<MainWindow>) {
                     match device.fetch_events() {
                         Ok(events) => {
                             for event in events {
-                                // event_type==KEY filters out SYN/MSC noise.
-                                // value: 0 = release, 1 = press, 2 = autorepeat.
-                                // Treat press AND repeat as "do it" for Up/Down
-                                // (so holding the button ramps the volume);
-                                // press only for Mute so it doesn't toggle every
-                                // 33 ms while held.
                                 if event.event_type() != evdev::EventType::KEY {
                                     continue;
                                 }
-                                let val = event.value();
+                                // value: 0 = release, 1 = press, 2 = autorepeat
+                                let val  = event.value();
                                 let code = evdev::Key::new(event.code());
-                                let key = match code {
-                                    evdev::Key::KEY_VOLUMEUP if val == 1 || val == 2 =>
-                                        Some(VolumeKey::Up),
-                                    evdev::Key::KEY_VOLUMEDOWN if val == 1 || val == 2 =>
-                                        Some(VolumeKey::Down),
-                                    evdev::Key::KEY_MUTE if val == 1 =>
-                                        Some(VolumeKey::Mute),
-                                    _ => None,
-                                };
-                                if let Some(k) = key {
-                                    apply_volume_key(&ui, k);
+                                match code {
+                                    evdev::Key::KEY_VOLUMEUP => {
+                                        if val == 1 {
+                                            state.up_held.store(true, Ordering::Relaxed);
+                                            apply_volume_key(&ui, VolumeKey::Up);
+                                        } else if val == 0 {
+                                            state.up_held.store(false, Ordering::Relaxed);
+                                        }
+                                        // val == 2 (autorepeat) intentionally
+                                        // ignored — our own ticker handles it.
+                                    }
+                                    evdev::Key::KEY_VOLUMEDOWN => {
+                                        if val == 1 {
+                                            state.down_held.store(true, Ordering::Relaxed);
+                                            apply_volume_key(&ui, VolumeKey::Down);
+                                        } else if val == 0 {
+                                            state.down_held.store(false, Ordering::Relaxed);
+                                        }
+                                    }
+                                    evdev::Key::KEY_MUTE if val == 1 => {
+                                        apply_volume_key(&ui, VolumeKey::Mute);
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -1680,6 +1739,37 @@ async fn main() -> Result<(), slint::PlatformError> {
     // handled in Rust instead of in the Slint FocusScope key handler.
     spawn_volume_key_listener(ui.as_weak());
 
+    // ── On-screen keyboard bridge (onboard via D-Bus) ─────────────────────
+    // Slint TextInputs (search bar, Wi-Fi password, device-name) fire
+    // request-keyboard(true/false) on focus change. We translate that into
+    // an org.onboard.Onboard.Keyboard.Show / .Hide method call. We use
+    // `dbus-send` rather than a D-Bus crate because the kiosk image already
+    // ships dbus utilities and a one-shot subprocess per focus change is
+    // cheap enough at human-touch latency.
+    ui.on_request_keyboard(|show| {
+        #[cfg(target_os = "linux")]
+        {
+            let method = if show { "Show" } else { "Hide" };
+            // .spawn() (not .status()) so we don't block the Slint event
+            // loop waiting for dbus-send to return; the call is fire-and-
+            // forget and onboard processes it asynchronously.
+            let _ = std::process::Command::new("dbus-send")
+                .args([
+                    "--type=method_call",
+                    "--dest=org.onboard.Onboard",
+                    "/org/onboard/Onboard/Keyboard",
+                    &format!("org.onboard.Onboard.Keyboard.{}", method),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            println!("[onboard] request-keyboard({}) — no-op on non-Linux", show);
+        }
+    });
+
     // ── Persistent status bar poller (Wi-Fi + battery) ────────────────────
     // Single background task that reads nmcli/DNS + /sys/class/power_supply
     // every 5s and pushes both into the UI via the event loop. The status
@@ -1740,23 +1830,10 @@ async fn main() -> Result<(), slint::PlatformError> {
         string.into()
     });
 
-    // TextManip global — used directly by VirtualKeyboard without per-site wiring
-    let text_manip = TextManip::get(&ui);
-    text_manip.on_char_count(|text| {
-        text.to_string().chars().count() as i32
-    });
-    text_manip.on_get_before_cursor(|text, pos| {
-        let text_str = text.to_string();
-        let chars: Vec<char> = text_str.chars().collect();
-        let pos = (pos.max(0) as usize).min(chars.len());
-        chars[..pos].iter().collect::<String>().into()
-    });
-    text_manip.on_get_after_cursor(|text, pos| {
-        let text_str = text.to_string();
-        let chars: Vec<char> = text_str.chars().collect();
-        let pos = (pos.max(0) as usize).min(chars.len());
-        chars[pos..].iter().collect::<String>().into()
-    });
+    // (The TextManip global was only used by the Slint VirtualKeyboard for
+    // cursor-aware text edits; with onboard now handling typing through
+    // native X11 keyboard events into Slint's TextInput, no per-site cursor
+    // helpers are needed.)
 
     // --- SETTINGS CALLBACKS ---
 

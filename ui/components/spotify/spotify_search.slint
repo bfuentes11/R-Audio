@@ -1,5 +1,4 @@
 import { ScrollView, HorizontalBox, VerticalBox, LineEdit } from "std-widgets.slint";
-import { VirtualKeyboard } from "../keyboard/keyboard.slint";
 
 export struct UITrack {
     title: string,
@@ -21,9 +20,9 @@ export component SpotifySearch inherits Rectangle {
     callback load-more();
     callback open-artist(string);
 
-    // Keyboard slide state
-    property <bool> keyboard-visible: false;
-    property <length> keyboard-height: 310px;
+    // Show/hide the system on-screen keyboard (onboard). Forwarded to
+    // MainWindow → Rust → org.onboard.Onboard.Keyboard.Show/Hide via D-Bus.
+    callback request-keyboard(bool);
 
     private property <length> text-input-margin: 1rem;
 
@@ -51,7 +50,7 @@ export component SpotifySearch inherits Rectangle {
                 }
                 touch-back := TouchArea {
                     clicked => {
-                        root.keyboard-visible = false;
+                        root.request-keyboard(false);
                         root.go-back();
                     }
                     mouse-cursor: pointer;
@@ -79,7 +78,7 @@ export component SpotifySearch inherits Rectangle {
                 border-radius: 24px;
                 background: #ffffff1a;
                 border-width: 1px;
-                border-color: root.keyboard-visible ? #1DB954 : #ffffff33;
+                border-color: search_input.has-focus ? #1DB954 : #ffffff33;
                 clip: true;
 
                 if root.search-query == "" : Text {
@@ -98,14 +97,12 @@ export component SpotifySearch inherits Rectangle {
                     single-line: true;
                     text <=> root.search-query;
                     accepted => {
-                        root.keyboard-visible = false;
+                        root.request-keyboard(false);
                         root.search-music(root.search-query);
                     }
-                    // Show keyboard when TextInput gains focus natively (on click)
+                    // Drive onboard show/hide off native focus changes.
                     changed has-focus => {
-                        if (self.has-focus) {
-                            root.keyboard-visible = true;
-                        }
+                        root.request-keyboard(self.has-focus);
                     }
                     cursor-position-changed(cursorPos) => {
                         // Handle text scrolling so cursor stays visible
@@ -178,7 +175,7 @@ export component SpotifySearch inherits Rectangle {
                                             enabled: track.artist-id != "";
                                             mouse-cursor: track.artist-id != "" ? pointer : default;
                                             clicked => {
-                                                root.keyboard-visible = false;
+                                                root.request-keyboard(false);
                                                 root.open-artist(track.artist-id);
                                             }
                                         }
@@ -194,7 +191,7 @@ export component SpotifySearch inherits Rectangle {
 
                         touch := TouchArea {
                             clicked => {
-                                root.keyboard-visible = false;
+                                root.request-keyboard(false);
                                 root.play-track(track.id);
                             }
                             mouse-cursor: pointer;
@@ -217,28 +214,6 @@ export component SpotifySearch inherits Rectangle {
         }
     }
 
-    // --- Sliding Keyboard Overlay ---
-    keyboard := VirtualKeyboard {
-        x: 0;
-        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
-        width: root.width;
-        height: root.keyboard-height;
-        text <=> root.search-query;
-        enter-label: "Search";
-
-        accepted => {
-            root.keyboard-visible = false;
-            root.search-music(root.search-query);
-        }
-
-        // Sync virtual keyboard cursor-pos to TextInput's native cursor
-        changed cursor-pos => {
-            search_input.set-selection-offsets(self.cursor-pos, self.cursor-pos);
-        }
-
-        animate y {
-            duration: 300ms;
-            easing: ease-out;
-        }
-    }
+    // (Sliding VirtualKeyboard removed — onboard now handles all on-screen
+    // typing; it pops up via D-Bus when search_input.has-focus changes.)
 }

@@ -15,10 +15,24 @@ if command -v openbox-session >/dev/null 2>&1; then
 fi
 
 # Start onboard on-screen keyboard if installed (touch input for kiosk settings).
-# --xid mode makes it dockable; we use floating layout with auto-show on text focus.
 # Layout 'Phone' is touch-optimized (large keys, full QWERTY + symbols).
+# Show/hide is driven by R-Audio over D-Bus
+# (org.onboard.Onboard.Keyboard.Show / .Hide) whenever a TextInput in the UI
+# gains/loses focus — see ui.on_request_keyboard in src/main.rs. Slint's old
+# in-tree VirtualKeyboard has been removed in favor of this OS-level kbd.
+#
+# Hide onboard once it has registered its DBus service so it doesn't flash
+# on screen at startup before any text input is focused. 2 s gives onboard
+# enough time on a cold boot to be ready to receive the Hide call.
 if command -v onboard >/dev/null 2>&1; then
     onboard --layout=Phone --theme=Nightshade &
+    (
+        sleep 2
+        dbus-send --type=method_call \
+            --dest=org.onboard.Onboard \
+            /org/onboard/Onboard/Keyboard \
+            org.onboard.Onboard.Keyboard.Hide >/dev/null 2>&1 || true
+    ) &
 fi
 
 # Execute the R-Audio launcher. 

@@ -1,5 +1,4 @@
 import { ScrollView, HorizontalBox, VerticalBox } from "std-widgets.slint";
-import { VirtualKeyboard } from "keyboard/keyboard.slint";
 
 export struct UIWifiNetwork {
     ssid: string,
@@ -32,33 +31,20 @@ export component Settings inherits Rectangle {
     callback connect-bluetooth(string);
     callback backspace-pressed(string) -> string;
 
+    // Show/hide the system on-screen keyboard (onboard). Forwarded to
+    // MainWindow → Rust → org.onboard.Onboard.Keyboard.Show/Hide via D-Bus.
+    callback request-keyboard(bool);
+
     property <string> active-tab: "wifi";
-    property <string> active-input: "wifi-password";
-
-    // Keyboard slide state
-    property <bool> keyboard-visible: false;
-    property <length> keyboard-height: 310px;
-
-    // Keyboard text — single source of truth
-    property <string> keyboard-text: "";
 
     init => {
         root.device-name = root.current-device-name;
-        root.keyboard-text = root.wifi-password;
     }
 
-    changed keyboard-text => {
-        if (root.active-input == "device-name") {
-            root.device-name = root.keyboard-text;
-        } else {
-            root.wifi-password = root.keyboard-text;
-        }
-    }
-
-    // Dismiss keyboard when switching to Bluetooth tab
+    // Dismiss onboard when switching to the Bluetooth tab (no text inputs there).
     changed active-tab => {
         if (root.active-tab == "bluetooth") {
-            root.keyboard-visible = false;
+            root.request-keyboard(false);
         }
     }
 
@@ -86,7 +72,7 @@ export component Settings inherits Rectangle {
                     }
                     touch-back := TouchArea {
                         clicked => {
-                            root.keyboard-visible = false;
+                            root.request-keyboard(false);
                             root.go-back();
                         }
                         mouse-cursor: pointer;
@@ -139,9 +125,7 @@ export component Settings inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => {
                                 root.active-tab = "wifi";
-                                root.active-input = "wifi-password";
-                                root.keyboard-text = root.wifi-password;
-                                root.keyboard-visible = false;
+                                root.request-keyboard(false);
                             }
                         }
                     }
@@ -159,9 +143,7 @@ export component Settings inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => {
                                 root.active-tab = "device";
-                                root.active-input = "device-name";
-                                root.keyboard-text = root.device-name;
-                                root.keyboard-visible = false;
+                                root.request-keyboard(false);
                             }
                         }
                     }
@@ -229,9 +211,8 @@ export component Settings inherits Rectangle {
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.selected-ssid = net.ssid;
-                                    root.active-input = "wifi-password";
-                                    root.keyboard-text = root.wifi-password;
-                                    root.keyboard-visible = false;
+                                    // Keyboard pops up automatically when the
+                                    // password input gains focus (see below).
                                 }
                             }
                         }
@@ -247,7 +228,7 @@ export component Settings inherits Rectangle {
                         border-radius: 8px;
                         background: #00000040;
                         border-width: 1px;
-                        border-color: root.keyboard-visible && root.active-input == "wifi-password" ? #1DB954 : #ffffff20;
+                        border-color: wifi-input.has-focus ? #1DB954 : #ffffff20;
 
                         if root.wifi-password == "" : Text {
                             x: 12px; text: "Password for " + root.selected-ssid;
@@ -264,17 +245,19 @@ export component Settings inherits Rectangle {
                                 text <=> root.wifi-password;
                                 single-line: true;
                                 accepted => {
-                                    root.keyboard-visible = false;
+                                    root.request-keyboard(false);
                                     root.connect-wifi(root.selected-ssid, root.wifi-password);
+                                }
+                                changed has-focus => {
+                                    root.request-keyboard(self.has-focus);
                                 }
                             }
                         }
                         TouchArea {
                             clicked => {
                                 wifi-focus.focus();
-                                root.active-input = "wifi-password";
-                                root.keyboard-text = root.wifi-password;
-                                root.keyboard-visible = true;
+                                // request-keyboard fires via wifi-input's
+                                // `changed has-focus` once focus settles.
                             }
                         }
                     }
@@ -285,7 +268,7 @@ export component Settings inherits Rectangle {
                         TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                root.keyboard-visible = false;
+                                root.request-keyboard(false);
                                 root.connect-wifi(root.selected-ssid, root.wifi-password);
                             }
                         }
@@ -316,7 +299,7 @@ export component Settings inherits Rectangle {
                         width: 320px; height: 48px; border-radius: 8px;
                         background: #00000040;
                         border-width: 1px;
-                        border-color: root.keyboard-visible && root.active-input == "device-name" ? #1DB954 : #ffffff20;
+                        border-color: device-input.has-focus ? #1DB954 : #ffffff20;
 
                         if root.device-name == "" : Text {
                             x: 16px; text: "Enter device hostname";
@@ -333,17 +316,17 @@ export component Settings inherits Rectangle {
                                 text <=> root.device-name;
                                 single-line: true;
                                 accepted => {
-                                    root.keyboard-visible = false;
+                                    root.request-keyboard(false);
                                     root.update-device-name(root.device-name);
+                                }
+                                changed has-focus => {
+                                    root.request-keyboard(self.has-focus);
                                 }
                             }
                         }
                         TouchArea {
                             clicked => {
                                 device-focus.focus();
-                                root.active-input = "device-name";
-                                root.keyboard-text = root.device-name;
-                                root.keyboard-visible = true;
                             }
                         }
                     }
@@ -357,7 +340,7 @@ export component Settings inherits Rectangle {
                         TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                root.keyboard-visible = false;
+                                root.request-keyboard(false);
                                 root.update-device-name(root.device-name);
                             }
                         }
@@ -435,31 +418,6 @@ export component Settings inherits Rectangle {
         }
     }
 
-    // --- Sliding Keyboard Overlay ---
-    keyboard := VirtualKeyboard {
-        x: 0;
-        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
-        width: root.width;
-        height: root.keyboard-height;
-        text: root.keyboard-text;
-        enter-label: root.active-tab == "wifi" ? "Connect" : "Apply";
-
-        accepted => {
-            root.keyboard-visible = false;
-            if (root.active-input == "device-name") {
-                root.update-device-name(root.device-name);
-            } else {
-                root.connect-wifi(root.selected-ssid, root.wifi-password);
-            }
-        }
-
-        changed text => {
-            root.keyboard-text = self.text;
-        }
-
-        animate y {
-            duration: 300ms;
-            easing: ease-out;
-        }
-    }
+    // (Sliding VirtualKeyboard removed — onboard now handles all on-screen
+    // typing; it pops up via D-Bus when wifi-input/device-input gain focus.)
 }
