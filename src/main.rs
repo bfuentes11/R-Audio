@@ -635,6 +635,116 @@ async fn process_tracks(
     slots.into_iter().flatten().collect()
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Hardware volume keys
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Slint 1.16 has no Key enum entry for the XF86 volume / media keys, so the
+// FocusScope key handler can't catch them. We open the raw input devices at
+// /dev/input/event* via evdev and translate KEY_VOLUMEUP / DOWN / MUTE into
+// the same player-volume property updates the on-screen slider performs. The
+// kiosk user is in the `input` group (set in kiosk-os/postinstall.sh), so no
+// root is required.
+
+#[derive(Copy, Clone)]
+enum VolumeKey { Up, Down, Mute }
+
+/// Apply a volume key press: read the current player-volume off the UI,
+/// compute the new value, write it back, and invoke the same Slint callback
+/// the on-screen slider uses so librespot stays in sync.
+fn apply_volume_key(ui_handle: &slint::Weak<MainWindow>, key: VolumeKey) {
+    let h = ui_handle.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = h.upgrade() {
+            let cur = ui.get_player_volume();
+            let new_vol = match key {
+                VolumeKey::Up   => (cur + 0.05).min(1.0),
+                VolumeKey::Down => (cur - 0.05).max(0.0),
+                VolumeKey::Mute => 0.0,
+            };
+            ui.set_player_volume(new_vol);
+            ui.invoke_player_change_volume(new_vol);
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_volume_key_listener(ui_handle: slint::Weak<MainWindow>) {
+    // Open every input device that advertises any of the three volume keys
+    // — usually that's the platform "Power Button" / "Surface ACPI" node,
+    // but a USB keyboard with media keys would also match. Each device gets
+    // its own blocking reader thread so a slow device can't starve another.
+    std::thread::spawn(move || {
+        // Give udev a moment to populate /dev/input on cold boots.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let devices: Vec<(std::path::PathBuf, evdev::Device)> = evdev::enumerate()
+            .filter(|(_, dev)| {
+                dev.supported_keys()
+                    .map(|keys| {
+                        keys.contains(evdev::Key::KEY_VOLUMEUP)
+                            || keys.contains(evdev::Key::KEY_VOLUMEDOWN)
+                            || keys.contains(evdev::Key::KEY_MUTE)
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if devices.is_empty() {
+            eprintln!("[volkeys] No input device advertises volume keys; hardware buttons disabled.");
+            return;
+        }
+
+        for (path, mut device) in devices {
+            let ui = ui_handle.clone();
+            std::thread::spawn(move || {
+                let name = device.name().unwrap_or("").to_string();
+                println!("[volkeys] Listening on {:?} ({})", path, name);
+                loop {
+                    match device.fetch_events() {
+                        Ok(events) => {
+                            for event in events {
+                                // event_type==KEY filters out SYN/MSC noise.
+                                // value: 0 = release, 1 = press, 2 = autorepeat.
+                                // Treat press AND repeat as "do it" for Up/Down
+                                // (so holding the button ramps the volume);
+                                // press only for Mute so it doesn't toggle every
+                                // 33 ms while held.
+                                if event.event_type() != evdev::EventType::KEY {
+                                    continue;
+                                }
+                                let val = event.value();
+                                let code = evdev::Key::new(event.code());
+                                let key = match code {
+                                    evdev::Key::KEY_VOLUMEUP if val == 1 || val == 2 =>
+                                        Some(VolumeKey::Up),
+                                    evdev::Key::KEY_VOLUMEDOWN if val == 1 || val == 2 =>
+                                        Some(VolumeKey::Down),
+                                    evdev::Key::KEY_MUTE if val == 1 =>
+                                        Some(VolumeKey::Mute),
+                                    _ => None,
+                                };
+                                if let Some(k) = key {
+                                    apply_volume_key(&ui, k);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[volkeys] {:?} read error: {} — giving up on this device.", path, e);
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spawn_volume_key_listener(_ui_handle: slint::Weak<MainWindow>) {
+    println!("[volkeys] Hardware volume keys only supported on Linux; skipping.");
+}
+
 /// Returns how long until `expires_at` minus `margin_secs`, or `None` if
 /// the deadline is already in the past or the expiry is unknown.
 fn duration_until_token_expiry(
@@ -1497,6 +1607,12 @@ async fn main() -> Result<(), slint::PlatformError> {
     // requests a real fullscreen mode regardless of WM presence.
     #[cfg(target_os = "linux")]
     ui.window().set_fullscreen(true);
+
+    // ── Hardware volume key listener ──────────────────────────────────────
+    // Spawn the evdev reader (Linux-only; no-op stub otherwise). See the
+    // module-level comment above spawn_volume_key_listener for why this is
+    // handled in Rust instead of in the Slint FocusScope key handler.
+    spawn_volume_key_listener(ui.as_weak());
 
     // ── Persistent status bar poller (Wi-Fi + battery) ────────────────────
     // Single background task that reads nmcli/DNS + /sys/class/power_supply

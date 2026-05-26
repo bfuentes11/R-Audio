@@ -979,32 +979,12 @@ export component MainWindow inherits Window {
                 root.player-expanded = false;
                 return accept;
             }
-            // ── Hardware volume buttons (Surface Go 2 side keys) ───────────
-            // X11/openbox forwards XF86 audio keys to the focused window as
-            // Slint Key.Volume{Up,Down,Mute}. Each Key.X is a special Unicode
-            // private-use char, so the comparison must be against the Key
-            // constant — *not* the literal string "VolumeUp".
-            //
-            // Note: Slint's Key enum names these `Volume*` (not `AudioVolume*`
-            // as Qt does), even though they originate from the same XF86 key
-            // codes. Don't confuse them with the `Audio*` constants, which
-            // refer to media-transport keys (rewind, forward, play, etc.).
-            if (event.text == Key.VolumeUp) {
-                root.player-volume = min(1.0, root.player-volume + 0.05);
-                root.player-change-volume(root.player-volume);
-                return accept;
-            }
-            if (event.text == Key.VolumeDown) {
-                root.player-volume = max(0.0, root.player-volume - 0.05);
-                root.player-change-volume(root.player-volume);
-                return accept;
-            }
-            if (event.text == Key.VolumeMute) {
-                // Mute = jump to 0. The user can press Up again to restore.
-                root.player-volume = 0.0;
-                root.player-change-volume(0.0);
-                return accept;
-            }
+            // ── Hardware volume buttons ────────────────────────────────────
+            // Slint 1.16's Key enum has no entries for volume / media keys,
+            // so we can't catch them here. They're handled in Rust via a
+            // /dev/input/event* reader spawned at startup
+            // (see spawn_volume_key_listener in main.rs), which updates the
+            // same player-volume property and invokes player-change-volume.
             return reject;
         }
     }

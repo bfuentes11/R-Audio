@@ -30,6 +30,14 @@ rustfft = "6"
 lru = "0.12"
 # symphonia = "0.5.5"
 
+# Linux-only: raw input-event access for hardware volume buttons.
+# Slint 1.16's Key enum has no media-key constants, so we can't catch
+# XF86AudioRaise/Lower/Mute through the FocusScope; we listen on /dev/input
+# directly. The kiosk user is in the `input` group (set in postinstall.sh)
+# so this works without root.
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.12"
+
 [build-dependencies]
 slint-build = "1.16.1"
 
