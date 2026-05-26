@@ -1,0 +1,32 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Glass-like gradient for the circle background -->
+    <linearGradient id="glass" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%"   stop-color="white" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.04"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle: subtle glass fill -->
+  <circle cx="100" cy="100" r="89" fill="url(#glass)"/>
+
+  <!-- R letterform: white -->
+  <path
+    d="M83.9622 72.6415H108.491C123.585 72.6415 123.585 87.7359 108.491 87.7359H83.9622V72.6415Z
+       M25.4717 142.453H100.943V121.698H83.9622V106.604H102.83
+         C123.585 106.604 112.264 142.453 129.245 142.453H176.415V106.604H165.094V110.377
+         C165.094 125.472 148.113 123.585 146.226 114.151
+         C144.34  104.717 136.792  97.1698 134.906  97.1698
+         C163.208  82.0755 146.226  51.8868 123.585  51.8868H34.9056V72.6415H53.7736V121.698H25.4717V142.453Z"
+    fill="white"
+    fill-opacity="0.92"
+  />
+
+  <!-- Outer ring -->
+  <circle cx="100" cy="100" r="90" fill="none" stroke="white" stroke-opacity="0.55" stroke-width="8.5"/>
+
+  <!-- Highlight arc: top-right quadrant, simulates glass reflection -->
+  <path d="M 100 12 A 88 88 0 0 1 176 56"
+        stroke="white" stroke-opacity="0.28" stroke-width="3"
+        fill="none" stroke-linecap="round"/>
+</svg>

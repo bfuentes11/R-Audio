@@ -23,6 +23,7 @@ import {
     UIWifiNetwork,
     UIBluetoothDevice,
 } from "components/settings.slint";
+import { BootSplash } from "components/boot_splash.slint";
 
 export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice, TextManip }
 
@@ -36,6 +37,15 @@ export component MainWindow inherits Window {
 
     in-out property <string> active-view: "home";
     in-out property <bool> player-expanded: false;
+
+    // ── Boot splash ───────────────────────────────────────────────────────
+    // Rust sets this to 0.0 once startup checks finish; the animate block
+    // smoothly fades the overlay out over 500 ms.
+    in property <float> boot-alpha: 1.0;
+    animate boot-alpha {
+        duration: 500ms;
+        easing: ease-in;
+    }
 
     // ── Status bar (top-center, shown on every view) ──────────────────────
     in property <bool> wifi-connected: false;
@@ -922,5 +932,15 @@ export component MainWindow inherits Window {
             }
             return reject;
         }
+    }
+
+    // ── Boot splash overlay ───────────────────────────────────────────────
+    // Rendered last so it sits above every other layer. The `if` removes it
+    // from the render tree once the fade-out animation completes (alpha → 0),
+    // so it doesn't capture pointer events after dismissal.
+    if root.boot-alpha > 0: BootSplash {
+        width:   100%;
+        height:  100%;
+        opacity: root.boot-alpha;
     }
 }

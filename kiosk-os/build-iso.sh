@@ -54,9 +54,9 @@ fi
 # ------------------------------------------------------------------------------
 # Dependencies
 # ------------------------------------------------------------------------------
-echo "Installing dependencies (xorriso, wget, librsvg2-bin)..."
+echo "Installing dependencies (xorriso, wget)..."
 apt-get update -qq
-apt-get install -y -qq xorriso wget librsvg2-bin
+apt-get install -y -qq xorriso wget
 
 # ------------------------------------------------------------------------------
 # Locate or download the official Debian DVD1
@@ -164,7 +164,7 @@ mkdir -p "$DEBS_DIR"
 # Packages the kiosk needs that aren't on Debian DVD1, plus any r-audio
 # runtime libs we want to bundle defensively.
 # Must be ONE line — newlines in the value break the `bash -c` string below.
-KIOSK_PKGS="openbox onboard pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill plymouth plymouth-themes xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libssl3 dnsmasq-base"
+KIOSK_PKGS="openbox onboard pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libssl3 dnsmasq-base"
 
 # Check for a pre-populated cache (used by CI to skip the docker download).
 # Set R_AUDIO_DEBS_CACHE to a directory path to enable.
@@ -191,16 +191,6 @@ else
         cp "$DEBS_DIR"/*.deb "$R_AUDIO_DEBS_CACHE/"
     fi
 fi
-
-# ------------------------------------------------------------------------------
-# Bake the Plymouth theme: swap the SVG's black strokes to white (so it shows
-# on Plymouth's black background) and rasterize to PNG at 400×400.
-# ------------------------------------------------------------------------------
-echo "Rendering Plymouth Rust-logo PNG from SVG..."
-mkdir -p "$WORK_DIR/payload/plymouth-theme"
-cp plymouth-theme/r-audio.plymouth "$WORK_DIR/payload/plymouth-theme/r-audio.plymouth"
-cp plymouth-theme/r-audio.script   "$WORK_DIR/payload/plymouth-theme/r-audio.script"
-rsvg-convert -w 400 -h 400 -o "$WORK_DIR/payload/plymouth-theme/raudio-logo.png" plymouth-theme/RAudioLogo.svg
 
 # Preseed (placed at the ISO root — d-i reads it as /cdrom/preseed.cfg)
 cp preseed.cfg "$WORK_DIR/preseed.cfg"

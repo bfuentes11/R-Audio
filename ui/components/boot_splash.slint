@@ -1,0 +1,122 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// BootSplash — Full-screen launch overlay
+//
+// Sits on top of the main window's animated orb background (which shows through
+// the frosted dark overlay for depth). The component manages its own entrance
+// animation; the parent controls exit by animating `opacity` to 0.
+//
+// Animation layers:
+//   t            — content fade + drift in on init (0 → 1 over 800ms)
+//   pulse-phase  — sin-driven glow breathe, period ~3.5 s
+//   ring-spin    — slow ring rotation, one revolution every 14 s
+// ─────────────────────────────────────────────────────────────────────────────
+
+export component BootSplash {
+    // ── Internal animation state ──────────────────────────────────────────
+    property <float>  t:           0.0;    // entrance: 0 → 1
+    property <length> drift:       20px;   // entrance: 20px → 0  (upward float)
+    property <angle>  ring-spin:   0deg;   // continuous ring rotation
+    property <angle>  pulse-phase: 0deg;   // continuous glow pulse driver
+
+    animate t           { duration: 800ms;   easing: ease-out; }
+    animate drift       { duration: 800ms;   easing: ease-out; }
+    animate ring-spin   { duration: 14000ms; easing: linear;   iteration-count: -1; }
+    animate pulse-phase { duration: 3500ms;  easing: linear;   iteration-count: -1; }
+
+    init => {
+        t           = 1.0;
+        drift       = 0px;
+        ring-spin   = 360deg;
+        pulse-phase = 360deg;
+    }
+
+    // ── Frosted overlay ───────────────────────────────────────────────────
+    // Darkens the animated orbs behind so they read as muted colour through
+    // "frosted glass" rather than competing with the splash content.
+    Rectangle {
+        width: 100%; height: 100%;
+        background: #090f1c;
+        opacity: 0.86;
+    }
+
+    // ── Glow blob (behind logo) ───────────────────────────────────────────
+    // Breathes via sin(pulse-phase): opacity cycles between ~0.25 and ~0.65
+    Rectangle {
+        width:  400px;
+        height: 400px;
+        border-radius: 200px;
+        x: (parent.width  - self.width)  / 2;
+        y: (parent.height - self.height) / 2 - 35px + root.drift;
+        background: @radial-gradient(circle,
+            #3a6fd866 0%,
+            #6930c333 48%,
+            #090f1c00 72%
+        );
+        opacity: root.t * (0.45 + 0.22 * Math.sin(root.pulse-phase));
+    }
+
+    // ── Spinning outer ring ───────────────────────────────────────────────
+    // A thin ring with a small bright tick at 12 o'clock so the rotation is
+    // clearly visible without being visually heavy.
+    Rectangle {
+        width:  215px;
+        height: 215px;
+        border-radius: 107.5px;
+        border-width: 1px;
+        border-color: #ffffff38;
+        background: transparent;
+        x: (parent.width  - self.width)  / 2;
+        y: (parent.height - self.height) / 2 - 35px + root.drift;
+        opacity: root.t;
+        rotation-angle:    root.ring-spin;
+        rotation-origin-x: 107.5px;
+        rotation-origin-y: 107.5px;
+
+        // Tick at 12 o'clock
+        Rectangle {
+            x: 98.5px; y: -1px;
+            width: 18px; height: 5px;
+            border-radius: 2.5px;
+            background: white;
+            opacity: 0.72;
+        }
+    }
+
+    // ── Logo ─────────────────────────────────────────────────────────────
+    Image {
+        source: @image-url("../assets/raudio-logo.svg");
+        width:  175px;
+        height: 175px;
+        x: (parent.width  - self.width)  / 2;
+        y: (parent.height - self.height) / 2 - 35px + root.drift;
+        opacity: root.t;
+    }
+
+    // ── Wordmark ──────────────────────────────────────────────────────────
+    Text {
+        text: "R·Audio";
+        color: white;
+        font-size: 33px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        horizontal-alignment: center;
+        width: parent.width;
+        x: 0;
+        y: parent.height / 2 + 68px + root.drift;
+        opacity: root.t;
+    }
+
+    // ── Tagline ───────────────────────────────────────────────────────────
+    Text {
+        text: "LOADING";
+        color: #ffffff55;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 4px;
+        horizontal-alignment: center;
+        width: parent.width;
+        x: 0;
+        y: parent.height / 2 + 112px + root.drift;
+        opacity: root.t * 0.85;
+    }
+}

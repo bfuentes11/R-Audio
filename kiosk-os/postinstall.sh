@@ -109,7 +109,7 @@ mkdir -p /target/var/cache/r-audio-debs
 cp "$PAYLOAD"/r-audio-debs/*.deb /target/var/cache/r-audio-debs/
 
 # --auto-deconfigure handles installing in dep order; -E skips already-installed.
-# We don't `set -e` around this because some postinst scripts (plymouth, openbox)
+# We don't `set -e` around this because some postinst scripts (openbox, etc.)
 # can emit non-fatal warnings that would trip set -e.
 in-target sh -c 'dpkg -i --auto-deconfigure /var/cache/r-audio-debs/*.deb' || {
     echo "[postinstall] WARNING: dpkg -i reported issues; some packages may have unmet deps."
@@ -120,27 +120,22 @@ in-target sh -c 'dpkg -i --auto-deconfigure /var/cache/r-audio-debs/*.deb' || {
 rm -rf /target/var/cache/r-audio-debs
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Plymouth: stage the R-Audio theme files (pulsing Rust logo) and activate.
-# Plymouth was just installed by the dpkg step above, so all the plymouth-*
-# tools and the /usr/share/plymouth/themes/ directory exist now.
+# Boot appearance — suppress all kernel/systemd console output and hide GRUB.
+# No Plymouth: the screen goes black immediately after GRUB and stays black
+# until r-audio's own Slint UI takes over. This is cleaner and simpler than
+# Plymouth since we own the whole display from the moment the app launches.
 # ──────────────────────────────────────────────────────────────────────────────
-echo "[postinstall] Installing R-Audio Plymouth boot splash theme..."
-mkdir -p /target/usr/share/plymouth/themes/r-audio
-cp "$PAYLOAD/plymouth-theme/r-audio.plymouth" /target/usr/share/plymouth/themes/r-audio/r-audio.plymouth
-cp "$PAYLOAD/plymouth-theme/r-audio.script"   /target/usr/share/plymouth/themes/r-audio/r-audio.script
-cp "$PAYLOAD/plymouth-theme/raudio-logo.png"    /target/usr/share/plymouth/themes/r-audio/raudio-logo.png
+echo "[postinstall] Configuring silent boot (no Plymouth)..."
 
-# Activate the theme and add `splash` to kernel cmdline.
-sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=0 rd.systemd.show_status=false rd.udev.log_level=3 vt.global_cursor_default=0 fbcon=nodefer"|' /target/etc/default/grub
+# Suppress kernel messages, systemd status, udev noise, and the VT cursor.
+sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=0 rd.systemd.show_status=false systemd.show_status=false rd.udev.log_level=3 vt.global_cursor_default=0 fbcon=nodefer"|' /target/etc/default/grub
 
-# Completely hide the GRUB menu
+# Completely hide the GRUB menu — zero-second timeout, no countdown.
 sed -i 's|^GRUB_TIMEOUT=.*|GRUB_TIMEOUT=0|' /target/etc/default/grub
 echo 'GRUB_TIMEOUT_STYLE=hidden' >> /target/etc/default/grub
 echo 'GRUB_HIDDEN_TIMEOUT=0' >> /target/etc/default/grub
-in-target plymouth-set-default-theme r-audio || echo "[postinstall] Plymouth theme activation deferred."
 
-# Rebuild initramfs so Plymouth ships in the early boot stage, and update
-# GRUB to pick up the new cmdline. Takes effect on the very first real boot.
+# Rebuild initramfs (picks up firmware/driver changes) and regenerate GRUB config.
 in-target update-initramfs -u
 in-target update-grub
 

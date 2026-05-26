@@ -1580,27 +1580,29 @@ async fn main() -> Result<(), slint::PlatformError> {
                 });
 
                 let networks = if cfg!(target_os = "linux") {
-                    let out = std::process::Command::new("nmcli")
-                        .args(&["-t", "-f", "SSID,SIGNAL", "device", "wifi", "list"])
-                        .output()
-                        .unwrap_or_else(|_| std::process::Output {
-                            status: std::process::ExitStatus::default(),
-                            stdout: vec![],
-                            stderr: vec![],
-                        });
-                    let text = String::from_utf8_lossy(&out.stdout).to_string();
-                    let mut nets: Vec<UIWifiNetwork> = vec![];
-                    for line in text.lines() {
-                        let parts: Vec<&str> = line.splitn(2, ':').collect();
-                        if parts.len() >= 2 {
-                            let ssid = parts[0].trim().to_string();
-                            let signal = parts[1].trim().to_string();
-                            if !ssid.is_empty() && !nets.iter().any(|n: &UIWifiNetwork| n.ssid == ssid.as_str()) {
-                                nets.push(UIWifiNetwork { ssid: ssid.into(), signal: signal.into() });
+                    tokio::task::spawn_blocking(|| {
+                        let out = std::process::Command::new("sudo")
+                            .args(["nmcli", "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list"])
+                            .output()
+                            .unwrap_or_else(|_| std::process::Output {
+                                status: std::process::ExitStatus::default(),
+                                stdout: vec![],
+                                stderr: vec![],
+                            });
+                        let text = String::from_utf8_lossy(&out.stdout).to_string();
+                        let mut nets: Vec<UIWifiNetwork> = vec![];
+                        for line in text.lines() {
+                            let parts: Vec<&str> = line.splitn(2, ':').collect();
+                            if parts.len() >= 2 {
+                                let ssid = parts[0].trim().to_string();
+                                let signal = parts[1].trim().to_string();
+                                if !ssid.is_empty() && !nets.iter().any(|n: &UIWifiNetwork| n.ssid == ssid.as_str()) {
+                                    nets.push(UIWifiNetwork { ssid: ssid.into(), signal: signal.into() });
+                                }
                             }
                         }
-                    }
-                    nets
+                        nets
+                    }).await.unwrap_or_default()
                 } else {
                     // Simulated networks on non-Linux
                     vec![
@@ -1648,23 +1650,29 @@ async fn main() -> Result<(), slint::PlatformError> {
                 // sudo for the kiosk user. Capture stderr so the UI can show
                 // the actual nmcli failure reason instead of just "Failed".
                 let (success, err_detail) = if cfg!(target_os = "linux") {
-                    let mut args = vec!["nmcli", "device", "wifi", "connect", &ssid];
-                    if !password.is_empty() {
-                        args.extend_from_slice(&["password", &password]);
-                    }
-                    match std::process::Command::new("sudo").args(&args).output() {
-                        Ok(out) if out.status.success() => (true, String::new()),
-                        Ok(out) => {
-                            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                            let detail = if !stderr.is_empty() { stderr } else { stdout };
-                            (false, detail)
+                    tokio::task::spawn_blocking({
+                        let ssid = ssid.clone();
+                        let password = password.clone();
+                        move || {
+                            let mut args = vec!["nmcli", "device", "wifi", "connect", ssid.as_str()];
+                            if !password.is_empty() {
+                                args.extend_from_slice(&["password", password.as_str()]);
+                            }
+                            match std::process::Command::new("sudo").args(&args).output() {
+                                Ok(out) if out.status.success() => (true, String::new()),
+                                Ok(out) => {
+                                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                                    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                                    let detail = if !stderr.is_empty() { stderr } else { stdout };
+                                    (false, detail)
+                                }
+                                Err(e) => (false, format!("nmcli invocation failed: {}", e)),
+                            }
                         }
-                        Err(e) => (false, format!("nmcli invocation failed: {}", e)),
-                    }
+                    }).await.unwrap_or((false, "internal task error".to_string()))
                 } else {
                     println!("[settings] Simulating Wi-Fi connect to '{}' with password '{}'", ssid, password);
-                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     (true, String::new())
                 };
 
@@ -3280,17 +3288,56 @@ async fn main() -> Result<(), slint::PlatformError> {
     let go_next_clone = go_next.clone();
 
     tokio::spawn(async move {
-        if is_first_run() {
-            println!("[main] First run detected.");
+        // ── Boot splash: enforce a minimum display time ───────────────────
+        // The splash fades in over 800ms and should be visible long enough
+        // for users to read the brand. We record the start time and wait for
+        // the remainder *after* the startup checks finish, so fast boots
+        // (saved session, internet already up) still show the splash for at
+        // least 2 s without slowing down slow boots unnecessarily.
+        const SPLASH_MIN_MS: u64 = 2000;
+        let splash_start = std::time::Instant::now();
 
-            // If Wi-Fi is already connected (NetworkManager auto-restored a
-            // saved profile, or someone configured Wi-Fi manually), there's
-            // no need to drag the user through the QR-code hotspot flow.
-            // Skip straight to Spotify pairing.
-            let has_internet = tokio::task::spawn_blocking(oobe_check_internet)
+        // ── Startup checks (run while the splash is visible) ─────────────
+        let first_run = is_first_run();
+
+        let has_internet = if first_run {
+            tokio::task::spawn_blocking(oobe_check_internet)
                 .await
-                .unwrap_or(false);
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
+        let is_valid = if !first_run {
+            let provider = &*init_spotify;
+            provider.auth.is_session_valid().await
+        } else {
+            false
+        };
+
+        // ── Wait out whatever remains of the minimum display time ─────────
+        let elapsed_ms = splash_start.elapsed().as_millis() as u64;
+        if elapsed_ms < SPLASH_MIN_MS {
+            tokio::time::sleep(std::time::Duration::from_millis(SPLASH_MIN_MS - elapsed_ms)).await;
+        }
+
+        // ── Fade the boot splash out ──────────────────────────────────────
+        let _ = slint::invoke_from_event_loop({
+            let h = init_ui.clone();
+            move || {
+                if let Some(ui) = h.upgrade() {
+                    ui.set_boot_alpha(0.0);
+                }
+            }
+        });
+        // Wait for the Slint 500ms fade-out animation to finish before
+        // switching views, so the real UI is never visible underneath a
+        // partially-transparent splash.
+        tokio::time::sleep(std::time::Duration::from_millis(550)).await;
+
+        // ── Navigate to the correct first view ────────────────────────────
+        if first_run {
+            println!("[main] First run detected.");
             if has_internet {
                 println!("[main] Internet already reachable — skipping Wi-Fi OOBE, going to Spotify pairing.");
                 start_pairing_flow(init_ui, init_spotify, init_player, go_next_clone);
@@ -3307,11 +3354,6 @@ async fn main() -> Result<(), slint::PlatformError> {
             }
             return;
         }
-
-        let is_valid = {
-            let provider = &*init_spotify;
-            provider.auth.is_session_valid().await
-        };
 
         if is_valid {
             run_authenticated_startup(init_ui, init_spotify, init_player, go_next_clone, false).await;
