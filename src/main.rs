@@ -3326,7 +3326,7 @@ async fn main() -> Result<(), slint::PlatformError> {
             let h = init_ui.clone();
             move || {
                 if let Some(ui) = h.upgrade() {
-                    ui.set_boot_alpha(0.0);
+                    ui.set_boot_done(true);
                 }
             }
         });
