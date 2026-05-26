@@ -154,37 +154,79 @@ fn oobe_stop_hotspot() {
     }
 }
 
-fn oobe_connect_wifi(ssid: &str, password: &str) -> bool {
-    if cfg!(target_os = "linux") {
-        let mut args = vec!["nmcli", "device", "wifi", "connect", ssid];
+/// Connects to a Wi-Fi network via nmcli. Returns the nmcli error string on
+/// failure so the OOBE screen can show *why* (wrong password vs. out of range
+/// vs. SSID typo) instead of a generic "try again".
+///
+/// Robustness notes (each of these is a real failure mode we hit in testing):
+///
+///  • **Stale scan cache after hotspot.** Once `oobe_stop_hotspot` brings the
+///    R-Audio-Setup AP down, the card re-enters managed mode and its BSS scan
+///    cache is empty until something triggers a fresh scan. `nmcli device wifi
+///    connect` won't proactively scan — it fails immediately with "No network
+///    with SSID 'X'". We issue an explicit rescan and wait 4 s for completion
+///    before attempting connect.
+///  • **Implicit device selection.** Without `ifname`, nmcli may pick a stale
+///    default that's still associated with the dying Hotspot connection.
+///    We always pass `ifname <wifi_dev>`.
+///  • **Hidden networks.** If the user picked "Enter SSID manually" the SSID
+///    is not in any scan. nmcli needs `hidden yes` to probe-request it
+///    directly. We retry once with that flag whenever the first attempt fails
+///    with "No network with SSID".
+fn oobe_connect_wifi(ssid: &str, password: &str) -> Result<(), String> {
+    if !cfg!(target_os = "linux") {
+        println!("[oobe] Simulating Wi-Fi connect to '{}'", ssid);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        return Ok(());
+    }
+
+    let wifi_dev = oobe_find_wifi_device()
+        .ok_or_else(|| "No Wi-Fi device found (is the radio enabled?)".to_string())?;
+
+    // Force a fresh BSS scan; rescan returns once the scan was queued, the
+    // actual scan completes a beat later — give it 4 s before the connect.
+    let _ = std::process::Command::new("sudo")
+        .args(["nmcli", "device", "wifi", "rescan", "ifname", &wifi_dev])
+        .status();
+    std::thread::sleep(std::time::Duration::from_secs(4));
+
+    // Closure builds + runs an nmcli connect with the supplied extra args
+    // (used for the `hidden yes` retry below).
+    let attempt = |extra: &[&str]| -> Result<(), String> {
+        let mut args: Vec<&str> = vec![
+            "nmcli", "device", "wifi", "connect", ssid,
+            "ifname", wifi_dev.as_str(),
+        ];
         if !password.is_empty() {
             args.extend_from_slice(&["password", password]);
         }
-        let output = std::process::Command::new("sudo")
+        args.extend_from_slice(extra);
+
+        let out = std::process::Command::new("sudo")
             .args(&args)
-            .output();
-        match output {
-            Ok(out) => {
-                if !out.status.success() {
-                    eprintln!(
-                        "[oobe] nmcli connect failed: {}{}",
-                        String::from_utf8_lossy(&out.stdout),
-                        String::from_utf8_lossy(&out.stderr),
-                    );
-                    false
-                } else {
-                    true
-                }
-            }
-            Err(e) => {
-                eprintln!("[oobe] Failed to invoke nmcli connect: {}", e);
-                false
-            }
+            .output()
+            .map_err(|e| format!("nmcli invocation failed: {}", e))?;
+        if out.status.success() {
+            return Ok(());
         }
-    } else {
-        println!("[oobe] Simulating Wi-Fi connect to '{}'", ssid);
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        true
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Err(if !stderr.is_empty() { stderr } else { stdout })
+    };
+
+    match attempt(&[]) {
+        Ok(()) => Ok(()),
+        Err(msg) if msg.contains("No network with SSID") || msg.contains("not found") => {
+            eprintln!("[oobe] nmcli: '{}' — retrying with hidden yes", msg);
+            attempt(&["hidden", "yes"]).map_err(|m| {
+                eprintln!("[oobe] nmcli connect (hidden) failed: {}", m);
+                m
+            })
+        }
+        Err(msg) => {
+            eprintln!("[oobe] nmcli connect failed: {}", msg);
+            Err(msg)
+        }
     }
 }
 
@@ -538,49 +580,73 @@ async fn start_oobe_wifi(
         });
 
         oobe_stop_hotspot();
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // Give NetworkManager time to flip the radio out of AP mode and
+        // back to managed before we start scanning/connecting. Shorter
+        // waits here lead to "No network with SSID" failures even when
+        // the network is in range.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-        let connected = tokio::task::spawn_blocking({
+        let connect_result = tokio::task::spawn_blocking({
             let ssid = ssid.clone();
             let pass = password.clone();
-            move || {
-                if oobe_connect_wifi(&ssid, &pass) {
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    oobe_check_internet()
-                } else {
-                    false
+            move || -> Result<(), String> {
+                oobe_connect_wifi(&ssid, &pass)?;
+                // nmcli reports success the moment the association completes,
+                // but DHCP + resolv.conf updates run async right after. The
+                // internet check (DNS-resolves api.spotify.com) often fails
+                // on the first attempt and passes on the second. Retry a few
+                // times before declaring the network unreachable.
+                for attempt in 1..=4 {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if oobe_check_internet() {
+                        return Ok(());
+                    }
+                    eprintln!(
+                        "[oobe] Connected but internet check attempt {}/4 failed; retrying...",
+                        attempt
+                    );
                 }
+                Err("Connected to Wi-Fi but couldn't reach the internet \
+                     (DNS or routing issue?)".to_string())
             }
-        }).await.unwrap_or(false);
+        }).await.unwrap_or_else(|e| Err(format!("Wi-Fi task panicked: {}", e)));
 
-        if connected {
-            println!("[oobe] Wi-Fi connected. Proceeding to Spotify pairing.");
-            // All kiosk packages were installed offline during d-i from the
-            // bundled .debs on the ISO, so no post-Wi-Fi package install is
-            // needed — straight to Spotify pairing.
-            let _ = slint::invoke_from_event_loop({
-                let h = ui_handle.clone();
-                move || {
-                    if let Some(ui) = h.upgrade() {
-                        ui.set_oobe_wifi_status("Connected! Setting up Spotify…".into());
+        match connect_result {
+            Ok(()) => {
+                println!("[oobe] Wi-Fi connected. Proceeding to Spotify pairing.");
+                // All kiosk packages were installed offline during d-i from the
+                // bundled .debs on the ISO, so no post-Wi-Fi package install is
+                // needed — straight to Spotify pairing.
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || {
+                        if let Some(ui) = h.upgrade() {
+                            ui.set_oobe_wifi_status("Connected! Setting up Spotify…".into());
+                        }
                     }
-                }
-            });
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            start_pairing_flow(ui_handle, spotify, player, go_next);
-            return;
-        } else {
-            println!("[oobe] Wi-Fi connection failed. Restarting hotspot.");
-            let _ = tokio::task::spawn_blocking(oobe_start_hotspot).await;
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let _ = slint::invoke_from_event_loop({
-                let h = ui_handle.clone();
-                move || {
-                    if let Some(ui) = h.upgrade() {
-                        ui.set_oobe_wifi_status("Connection failed — try again.".into());
+                });
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                start_pairing_flow(ui_handle, spotify, player, go_next);
+                return;
+            }
+            Err(err_msg) => {
+                println!("[oobe] Wi-Fi connection failed: {}", err_msg);
+                let _ = tokio::task::spawn_blocking(oobe_start_hotspot).await;
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let _ = slint::invoke_from_event_loop({
+                    let h = ui_handle.clone();
+                    move || {
+                        if let Some(ui) = h.upgrade() {
+                            // Surface the actual nmcli/internet error on the
+                            // kiosk screen so the user can tell wrong-password
+                            // from out-of-range from DNS issues without SSH.
+                            ui.set_oobe_wifi_status(
+                                format!("Connection failed:\n{}\n\nScan the QR and try again.", err_msg).into()
+                            );
+                        }
                     }
-                }
-            });
+                });
+            }
         }
     }
 }
