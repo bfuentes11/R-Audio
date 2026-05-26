@@ -1747,22 +1747,46 @@ async fn main() -> Result<(), slint::PlatformError> {
     // ships dbus utilities and a one-shot subprocess per focus change is
     // cheap enough at human-touch latency.
     ui.on_request_keyboard(|show| {
+        println!("[onboard] request-keyboard({}) fired from Slint", show);
         #[cfg(target_os = "linux")]
         {
             let method = if show { "Show" } else { "Hide" };
-            // .spawn() (not .status()) so we don't block the Slint event
-            // loop waiting for dbus-send to return; the call is fire-and-
-            // forget and onboard processes it asynchronously.
-            let _ = std::process::Command::new("dbus-send")
-                .args([
-                    "--type=method_call",
-                    "--dest=org.onboard.Onboard",
-                    "/org/onboard/Onboard/Keyboard",
-                    &format!("org.onboard.Onboard.Keyboard.{}", method),
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
+            // Spawn dbus-send on a blocking helper so we can capture and log
+            // the result — Slint's event loop isn't blocked because we don't
+            // wait for the JoinHandle. If the call fails (onboard not
+            // running, no D-Bus session, wrong service name) the output goes
+            // to the launcher's terminal/log so it's debuggable without SSH.
+            let method = method.to_string();
+            std::thread::spawn(move || {
+                let result = std::process::Command::new("dbus-send")
+                    .args([
+                        "--print-reply",
+                        "--type=method_call",
+                        "--dest=org.onboard.Onboard",
+                        "/org/onboard/Onboard/Keyboard",
+                        &format!("org.onboard.Onboard.Keyboard.{}", method),
+                    ])
+                    .output();
+                match result {
+                    Ok(out) if out.status.success() => {
+                        println!("[onboard] {} ok", method);
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        eprintln!(
+                            "[onboard] {} failed (exit {:?}):\n  stderr: {}\n  stdout: {}",
+                            method,
+                            out.status.code(),
+                            stderr.trim(),
+                            stdout.trim()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[onboard] dbus-send invocation failed: {}", e);
+                    }
+                }
+            });
         }
         #[cfg(not(target_os = "linux"))]
         {

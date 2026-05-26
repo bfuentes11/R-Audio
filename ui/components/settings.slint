@@ -256,8 +256,12 @@ export component Settings inherits Rectangle {
                         TouchArea {
                             clicked => {
                                 wifi-focus.focus();
-                                // request-keyboard fires via wifi-input's
-                                // `changed has-focus` once focus settles.
+                                // Belt-and-suspenders: explicitly request the
+                                // keyboard here in addition to the input's
+                                // `changed has-focus` handler. Either path is
+                                // enough on its own; firing both is harmless
+                                // (Show is idempotent on onboard).
+                                root.request-keyboard(true);
                             }
                         }
                     }
@@ -327,6 +331,9 @@ export component Settings inherits Rectangle {
                         TouchArea {
                             clicked => {
                                 device-focus.focus();
+                                // See wifi-input TouchArea above — explicit
+                                // request mirrors `changed has-focus`.
+                                root.request-keyboard(true);
                             }
                         }
                     }

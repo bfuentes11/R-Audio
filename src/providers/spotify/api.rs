@@ -221,33 +221,53 @@ impl SpotifyApiService {
     }
 
     pub async fn get_playlist(&self, playlist_id: &str, snapshot_id: &str, cache: &SpotifyCache) -> Result<(String, String, String, Vec<Track>), String> {
+        // Self-heal: if there's a cached entry but its track list is empty,
+        // it's almost certainly a stale write from the old /tracks path
+        // (which silently returned 0 items for some playlists). Drop it
+        // and refetch live. We still serve healthy non-empty caches as
+        // normal, so this doesn't slow steady-state navigation.
         if let Some(cached_data) = cache.get_playlist(playlist_id, snapshot_id).await {
-            return Ok(cached_data);
+            if !cached_data.3.is_empty() {
+                return Ok(cached_data);
+            }
+            println!(
+                "[api] Playlist {} cache hit but tracks empty — refetching live (likely stale).",
+                playlist_id
+            );
         }
 
         let access_token = self.auth.get_access_token().await?;
 
-        let url = format!("https://api.spotify.com/v1/playlists/{}", playlist_id); 
-        
+        // Pass `additional_types=track,episode` so episode-typed entries
+        // round-trip through the response. Without it the API silently
+        // strips episodes from the embedded first page, leaving holes in
+        // the returned items array for playlists that mix podcasts with
+        // music. (We also need `fields` to be unset so we get the full
+        // tracks block.)
+        let url = format!(
+            "https://api.spotify.com/v1/playlists/{}?additional_types=track,episode",
+            playlist_id
+        );
+
         let res = self.client.clone()
             .get(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send().await.map_err(|e| e.to_string())?;
 
         let json: Value = res.json().await.map_err(|e| e.to_string())?;
-        
+
         let playlist_name = json["name"].as_str().unwrap_or("Selected Playlist").to_string();
         let owner_name = json["owner"]["display_name"].as_str().unwrap_or("Spotify").to_string();
-        
+
         let cover_url = json["images"]
             .as_array()
-            .and_then(|imgs| imgs.get(0)) 
+            .and_then(|imgs| imgs.get(0))
             .and_then(|img| img["url"].as_str())
             .unwrap_or("")
             .to_string();
 
         let mut tracks = Vec::new();
-        
+
         let first_page = &json["tracks"];
         let total_tracks = first_page["total"].as_u64().unwrap_or(0);
         let limit = first_page["limit"].as_u64().unwrap_or(20);
@@ -274,7 +294,15 @@ impl SpotifyApiService {
             }
         }
 
-        // Fetch remaining pages in parallel!
+        // ── Subsequent pages via /items (not /tracks) ─────────────────────
+        // /items is the modern playlist-contents endpoint: it returns the
+        // same response shape as /tracks but actually surfaces every item
+        // in the playlist. /tracks has been increasingly inconsistent —
+        // some playlists come back empty, some drop episode entries — so
+        // we use /items everywhere for pagination. The first page is
+        // still the embedded `tracks` block in the playlist metadata
+        // response above (saves one round-trip), but `additional_types`
+        // above keeps that consistent with what /items would return.
         if total_tracks > items_per_page {
             let num_pages = ((total_tracks - 1) / items_per_page) as u32;
             let mut join_set = tokio::task::JoinSet::new();
@@ -282,7 +310,7 @@ impl SpotifyApiService {
             for page_idx in 1..=num_pages {
                 let offset = page_idx * (items_per_page as u32);
                 let url = format!(
-                    "https://api.spotify.com/v1/playlists/{}/tracks?offset={}&limit={}",
+                    "https://api.spotify.com/v1/playlists/{}/items?offset={}&limit={}&additional_types=track,episode",
                     playlist_id, offset, items_per_page
                 );
                 let client = self.client.clone();

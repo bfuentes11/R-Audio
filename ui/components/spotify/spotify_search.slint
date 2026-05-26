@@ -81,6 +81,20 @@ export component SpotifySearch inherits Rectangle {
                 border-color: search_input.has-focus ? #1DB954 : #ffffff33;
                 clip: true;
 
+                // Tap zone below the visuals: declared FIRST in source so it
+                // renders BELOW Text + TextInput. Direct taps on the
+                // TextInput still go to it (TextInput captures mouse events
+                // and is rendered on top); taps on the placeholder-text
+                // region fall through to this TouchArea, which focuses
+                // search_input and explicitly requests onboard — mirroring
+                // the settings TextInputs' belt-and-suspenders pattern.
+                TouchArea {
+                    clicked => {
+                        search_input.focus();
+                        root.request-keyboard(true);
+                    }
+                }
+
                 if root.search-query == "" : Text {
                     x: 20px; text: "What do you want to listen to?";
                     color: #ffffff66; font-size: 16px;

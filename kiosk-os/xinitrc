@@ -2,6 +2,20 @@
 # R-Audio Bare-Metal X11 Startup Script
 # Place this at /home/kiosk/.xinitrc on the target system
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Fix #2 (D-Bus session bus): startx by itself doesn't bring up a session bus,
+# which means:
+#   • onboard can't register its org.onboard.Onboard service
+#   • r-audio's dbus-send calls to Show/Hide the keyboard have nowhere to go
+# Re-exec the entire xinitrc body under dbus-run-session the first time
+# through. dbus-run-session starts a private session bus, exports
+# DBUS_SESSION_BUS_ADDRESS into the environment, runs the rest of the script,
+# and cleans the bus up when the script exits.
+# ──────────────────────────────────────────────────────────────────────────────
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    exec dbus-run-session -- "$0" "$@"
+fi
+
 # Disable screen blanking, screensaver, and DPMS power-saving modes
 xset s off
 xset s noblank
@@ -14,27 +28,36 @@ if command -v openbox-session >/dev/null 2>&1; then
     openbox-session &
 fi
 
-# Start onboard on-screen keyboard if installed (touch input for kiosk settings).
+# ──────────────────────────────────────────────────────────────────────────────
+# Onboard on-screen keyboard.
 # Layout 'Phone' is touch-optimized (large keys, full QWERTY + symbols).
 # Show/hide is driven by R-Audio over D-Bus
 # (org.onboard.Onboard.Keyboard.Show / .Hide) whenever a TextInput in the UI
 # gains/loses focus — see ui.on_request_keyboard in src/main.rs. Slint's old
 # in-tree VirtualKeyboard has been removed in favor of this OS-level kbd.
 #
-# Hide onboard once it has registered its DBus service so it doesn't flash
-# on screen at startup before any text input is focused. 2 s gives onboard
-# enough time on a cold boot to be ready to receive the Hide call.
+# Fix #3 (startup race): Retry the initial Hide call up to 5×. On a cold
+# boot onboard can take several seconds to register its DBus service
+# (Python interpreter spin-up + gtk init), so the first one or two Hide
+# attempts will silently fail. The loop exits on the first success, so
+# in steady state this is one cheap dbus-send call.
+# ──────────────────────────────────────────────────────────────────────────────
 if command -v onboard >/dev/null 2>&1; then
     onboard --layout=Phone --theme=Nightshade &
     (
-        sleep 2
-        dbus-send --type=method_call \
-            --dest=org.onboard.Onboard \
-            /org/onboard/Onboard/Keyboard \
-            org.onboard.Onboard.Keyboard.Hide >/dev/null 2>&1 || true
+        for i in 1 2 3 4 5; do
+            sleep 2
+            if dbus-send --type=method_call \
+                --dest=org.onboard.Onboard \
+                /org/onboard/Onboard/Keyboard \
+                org.onboard.Onboard.Keyboard.Hide >/dev/null 2>&1; then
+                break
+            fi
+        done
     ) &
 fi
 
-# Execute the R-Audio launcher. 
-# Using "exec" makes it replace the shell process, ensuring X11 shuts down if the launcher exits.
+# Execute the R-Audio launcher.
+# Using "exec" makes it replace the shell process, ensuring X11 shuts down if
+# the launcher exits.
 exec /usr/local/bin/r-audio-launcher
