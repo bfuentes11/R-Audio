@@ -19,6 +19,11 @@ export component Settings inherits Rectangle {
     in property <string> current-device-name: "r-audio";
     in property <string> status-message: "";
 
+    // Live contents of /tmp/r-audio.log, populated by the Debug tab on
+    // tab-switch + every 2 s while open. Refreshes via refresh-debug-log
+    // callback; cleared via clear-debug-log.
+    in property <string> debug-log-content: "";
+
     in-out property <string> device-name: "";
     in-out property <string> wifi-password: "";
     in-out property <string> selected-ssid: "";
@@ -34,6 +39,11 @@ export component Settings inherits Rectangle {
     // Show/hide the system on-screen keyboard (onboard). Forwarded to
     // MainWindow → Rust → org.onboard.Onboard.Keyboard.Show/Hide via D-Bus.
     callback request-keyboard(bool);
+
+    // Debug tab — Rust reads /tmp/r-audio.log and writes the tail back into
+    // debug-log-content. Clear truncates the file.
+    callback refresh-debug-log();
+    callback clear-debug-log();
 
     property <string> active-tab: "wifi";
 
@@ -158,6 +168,25 @@ export component Settings inherits Rectangle {
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                         TouchArea { mouse-cursor: pointer; clicked => { root.active-tab = "bluetooth"; } }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 8px;
+                        background: root.active-tab == "debug" ? #ffffff1c : transparent;
+                        Text {
+                            text: "Debug";
+                            color: root.active-tab == "debug" ? white : #ffffff80;
+                            font-size: 14px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.active-tab = "debug";
+                                root.request-keyboard(false);
+                                root.refresh-debug-log();
+                            }
+                        }
                     }
                 }
             }
@@ -420,6 +449,66 @@ export component Settings inherits Rectangle {
                             }
                         }
                     }
+                }
+            }
+
+            // 4. Debug Tab — on-screen viewer for /tmp/r-audio.log so we
+            // can diagnose kiosk issues without a keyboard or SSH.
+            if root.active-tab == "debug" : VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "R-Audio Log (/tmp/r-audio.log)";
+                           color: white; font-size: 16px; font-weight: 700; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            width: 80px; height: 28px; border-radius: 14px; background: #1db95433;
+                            border-width: 1px; border-color: #1DB954;
+                            Text { text: "Refresh"; color: white; font-size: 11px; font-weight: 700;
+                                   horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.refresh-debug-log(); } }
+                        }
+                        Rectangle {
+                            width: 70px; height: 28px; border-radius: 14px; background: #e6394633;
+                            border-width: 1px; border-color: #e63946;
+                            Text { text: "Clear"; color: white; font-size: 11px; font-weight: 700;
+                                   horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.clear-debug-log(); } }
+                        }
+                    }
+                }
+
+                // Scrollable monospace text dump. Flickable + viewport-height
+                // matches the dashboard/album pattern (ScrollView in std-
+                // widgets misbehaves inside vertical-stretch contexts).
+                Flickable {
+                    vertical-stretch: 1;
+                    min-height: 0px;
+                    viewport-height: log-text.preferred-height + 16px;
+                    viewport-width: self.width;
+
+                    log-text := Text {
+                        x: 8px; y: 8px;
+                        width: parent.width - 16px;
+                        text: root.debug-log-content == ""
+                              ? "(no log content yet — interact with the app to populate it, then tap Refresh)"
+                              : root.debug-log-content;
+                        color: #cccccc;
+                        font-size: 10px;
+                        font-family: "monospace";
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Auto-refresh every 2 s while the Debug tab is showing.
+                // Stops the moment you switch away (running: == "debug").
+                Timer {
+                    interval: 2s;
+                    running: root.active-tab == "debug";
+                    triggered => { root.refresh-debug-log(); }
                 }
             }
         }

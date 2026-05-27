@@ -242,11 +242,22 @@ impl SpotifyApiService {
             "https://api.spotify.com/v1/playlists/{}?fields=name,owner(display_name),images,tracks(total,limit)",
             playlist_id
         );
+        println!("[api] GET {}", meta_url);
         let meta_res = self.client.clone()
             .get(&meta_url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send().await.map_err(|e| e.to_string())?;
-        let meta_json: Value = meta_res.json().await.map_err(|e| e.to_string())?;
+        let meta_status = meta_res.status();
+        let meta_body = meta_res.text().await.map_err(|e| e.to_string())?;
+        if !meta_status.is_success() {
+            eprintln!("[api] playlist metadata failed: {} body={}", meta_status,
+                meta_body.chars().take(300).collect::<String>());
+            return Err(format!("Spotify {} for playlist meta {}: {}",
+                meta_status, playlist_id,
+                meta_body.chars().take(300).collect::<String>()));
+        }
+        let meta_json: Value = serde_json::from_str(&meta_body)
+            .map_err(|e| format!("playlist meta JSON parse failed: {}", e))?;
 
         let playlist_name = meta_json["name"].as_str().unwrap_or("Selected Playlist").to_string();
         let owner_name = meta_json["owner"]["display_name"].as_str().unwrap_or("Spotify").to_string();
@@ -259,6 +270,8 @@ impl SpotifyApiService {
         let total_tracks = meta_json["tracks"]["total"].as_u64().unwrap_or(0);
         let limit_hint = meta_json["tracks"]["limit"].as_u64().unwrap_or(50);
         let items_per_page = if limit_hint == 0 { 50 } else { limit_hint };
+        println!("[api] playlist '{}' (id={}) total={}, page={}",
+            playlist_name, playlist_id, total_tracks, items_per_page);
 
         // ── 2. ALL tracks via /items (page 0 onward, in parallel) ─────────
         // /items is the modern playlist-contents endpoint. We start from
@@ -543,7 +556,8 @@ impl SpotifyApiService {
     pub async fn add_track_to_liked_songs(&self, track_id: &str) -> Result<(), String> {
         let access_token = self.auth.get_access_token().await?;
         let track_uri = format!("spotify:track:{}", track_id);
-        
+        println!("[api] PUT /me/library uri={}", track_uri);
+
         let response = self.client.clone()
             .put("https://api.spotify.com/v1/me/library")
             .query(&[("uris", &track_uri)])
@@ -553,12 +567,13 @@ impl SpotifyApiService {
             .await
             .map_err(|e| e.to_string())?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            eprintln!("[api] add to library failed: {} body={}", status, text);
             return Err(format!("Failed to add to Liked Songs ({}): {}", status, text));
         }
-
+        println!("[api] add to library OK ({})", status);
         Ok(())
     }
 
@@ -566,7 +581,8 @@ impl SpotifyApiService {
         let access_token = self.auth.get_access_token().await?;
         let url = format!("https://api.spotify.com/v1/playlists/{}/tracks", playlist_id);
         let track_uri = format!("spotify:track:{}", track_id);
-        
+        println!("[api] POST {} body uris=[{}]", url, track_uri);
+
         let response = self.client.clone()
             .post(&url)
             .header("Authorization", format!("Bearer {}", access_token))
@@ -580,8 +596,10 @@ impl SpotifyApiService {
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            eprintln!("[api] add to playlist failed: {} body={}", status, text);
             return Err(format!("Failed to add to playlist ({}): {}", status, text));
         }
+        println!("[api] add to playlist OK ({})", status);
 
         let json: Value = response.json().await.map_err(|e| e.to_string())?;
         let snapshot_id = json["snapshot_id"].as_str()
@@ -596,6 +614,7 @@ impl SpotifyApiService {
         // /me/library expects `uris` with full Spotify URIs ("spotify:track:ID"),
         // NOT the classic /me/tracks shape which used `ids` with raw track IDs.
         let track_uri = format!("spotify:track:{}", track_id);
+        println!("[api] DELETE /me/library uri={}", track_uri);
 
         let response = self.client.clone()
             .delete("https://api.spotify.com/v1/me/library")
@@ -606,12 +625,13 @@ impl SpotifyApiService {
             .await
             .map_err(|e| e.to_string())?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            eprintln!("[api] remove from library failed: {} body={}", status, text);
             return Err(format!("Failed to remove from Liked Songs ({}): {}", status, text));
         }
-
+        println!("[api] remove from library OK ({})", status);
         Ok(())
     }
 
@@ -619,6 +639,7 @@ impl SpotifyApiService {
         let access_token = self.auth.get_access_token().await?;
         let url = format!("https://api.spotify.com/v1/playlists/{}/tracks", playlist_id);
         let track_uri = format!("spotify:track:{}", track_id);
+        println!("[api] DELETE {} body tracks=[{}]", url, track_uri);
 
         let response = self.client.clone()
             .delete(&url)
@@ -633,8 +654,10 @@ impl SpotifyApiService {
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            eprintln!("[api] remove from playlist failed: {} body={}", status, text);
             return Err(format!("Failed to remove from playlist ({}): {}", status, text));
         }
+        println!("[api] remove from playlist OK ({})", status);
 
         let json: Value = response.json().await.map_err(|e| e.to_string())?;
         let snapshot_id = json["snapshot_id"].as_str()
@@ -651,6 +674,7 @@ impl SpotifyApiService {
         // which used `ids` with raw track IDs. Response is still a JSON
         // array of booleans in request order.
         let track_uri = format!("spotify:track:{}", track_id);
+        println!("[api] GET /me/library/contains uri={}", track_uri);
         let response = self.client.clone()
             .get("https://api.spotify.com/v1/me/library/contains")
             .query(&[("uris", &track_uri)])

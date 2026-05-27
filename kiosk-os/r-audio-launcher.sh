@@ -8,6 +8,13 @@
 # Finally, it starts the main player client ('r-audio').
 # ==============================================================================
 
+# Redirect ALL output (this script + the r-audio binary we exec into at the
+# end) to /tmp/r-audio.log so the Slint Debug tab in Settings can display it
+# on the kiosk screen — the Surface Go 2 has no keyboard, no easy SSH path,
+# so on-screen log viewing is the only diagnostic option. tmpfs clears on
+# reboot, which is fine for live debugging.
+exec > /tmp/r-audio.log 2>&1
+
 echo "[launcher] Starting R-Audio Kiosk Boot Manager..."
 
 # Load environment (credentials + display settings)

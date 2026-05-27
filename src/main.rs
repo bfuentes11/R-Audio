@@ -2164,6 +2164,51 @@ async fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    // ── Debug log viewer (Settings → Debug tab) ───────────────────────────
+    // The launcher (kiosk-os/r-audio-launcher.sh) redirects r-audio's
+    // stdout+stderr to /tmp/r-audio.log. These callbacks let the on-screen
+    // Debug tab read the tail of that file and clear it — the only way to
+    // see diagnostic output on a kiosk that has no keyboard and no SSH.
+    const DEBUG_LOG_PATH: &str = "/tmp/r-audio.log";
+    const DEBUG_LOG_TAIL_LINES: usize = 200;
+
+    let ui_handle_dbg = ui.as_weak();
+    ui.on_settings_refresh_debug_log(move || {
+        let ui_handle = ui_handle_dbg.clone();
+        // Read on a blocking thread; the file can be a few hundred KB and
+        // we don't want to stall the Slint event loop on disk I/O.
+        std::thread::spawn(move || {
+            let content = std::fs::read_to_string(DEBUG_LOG_PATH).unwrap_or_else(|e| {
+                format!("(could not read {}: {})", DEBUG_LOG_PATH, e)
+            });
+            // Keep only the tail so the Text widget doesn't choke on
+            // megabytes of history if the kiosk's been up for a while.
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(DEBUG_LOG_TAIL_LINES);
+            let tail = lines[start..].join("\n");
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_handle.upgrade() {
+                    ui.set_settings_debug_log_content(tail.into());
+                }
+            });
+        });
+    });
+
+    let ui_handle_dbg_clear = ui.as_weak();
+    ui.on_settings_clear_debug_log(move || {
+        let ui_handle = ui_handle_dbg_clear.clone();
+        std::thread::spawn(move || {
+            // Truncate the file rather than delete it — keeps the inode so
+            // r-audio's open log fd keeps writing into the same file.
+            let _ = std::fs::write(DEBUG_LOG_PATH, "");
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_handle.upgrade() {
+                    ui.set_settings_debug_log_content("(log cleared)".into());
+                }
+            });
+        });
+    });
+
     let master_tracks = Arc::new(Mutex::new(Vec::<TrackItem>::new()));
 
 

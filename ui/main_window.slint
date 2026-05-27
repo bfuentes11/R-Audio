@@ -154,11 +154,14 @@ export component MainWindow inherits Window {
     in property <bool> settings-bluetooth-scanning: false;
     in property <string> settings-current-device-name: "r-audio";
     in property <string> settings-status-message: "";
+    in property <string> settings-debug-log-content: "";
     callback settings-scan-wifi();
     callback settings-connect-wifi(string, string);
     callback settings-update-device-name(string);
     callback settings-scan-bluetooth();
     callback settings-connect-bluetooth(string);
+    callback settings-refresh-debug-log();
+    callback settings-clear-debug-log();
 
     // Player Bar Properties
     in property <bool> player-is-playing: false;
@@ -523,12 +526,15 @@ export component MainWindow inherits Window {
                 bluetooth-scanning: root.settings-bluetooth-scanning;
                 current-device-name: root.settings-current-device-name;
                 status-message: root.settings-status-message;
+                debug-log-content: root.settings-debug-log-content;
                 go-back => { root.active-view = "home"; }
                 scan-wifi => { root.settings-scan-wifi(); }
                 connect-wifi(ssid, pwd) => { root.settings-connect-wifi(ssid, pwd); }
                 update-device-name(name) => { root.settings-update-device-name(name); }
                 scan-bluetooth => { root.settings-scan-bluetooth(); }
                 connect-bluetooth(mac) => { root.settings-connect-bluetooth(mac); }
+                refresh-debug-log => { root.settings-refresh-debug-log(); }
+                clear-debug-log => { root.settings-clear-debug-log(); }
                 backspace-pressed(s) => { root.backspace-pressed(s) }
                 request-keyboard(show) => { root.request-keyboard(show); }
             }
