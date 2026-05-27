@@ -1728,10 +1728,14 @@ async fn main() -> Result<(), slint::PlatformError> {
 
     // Force fullscreen on Linux kiosk targets. On bare X11 without a WM
     // (first boot before openbox is installed) the SLINT_FULLSCREEN env-var
-    // hint is unreliable, so we set it programmatically here so winit
-    // requests a real fullscreen mode regardless of WM presence.
+    // We use maximized + no-frame (set in main_window.slint) instead of
+    // true fullscreen on Linux. Fullscreen sets _NET_WM_STATE_FULLSCREEN
+    // which openbox stacks above the normal layer — that pushed onboard
+    // underneath our window and made the OSK invisible no matter what
+    // Show/Hide commands we sent. Maximized + borderless looks identical
+    // visually but stays in the normal layer so OSK can sit on top.
     #[cfg(target_os = "linux")]
-    ui.window().set_fullscreen(true);
+    ui.window().set_maximized(true);
 
     // ── Hardware volume key listener ──────────────────────────────────────
     // Spawn the evdev reader (Linux-only; no-op stub otherwise). See the
@@ -1842,8 +1846,11 @@ async fn main() -> Result<(), slint::PlatformError> {
         let ui_handle = ui_handle.clone();
         move || {
             if let Some(ui) = ui_handle.upgrade() {
-                let is_fullscreen = ui.window().is_fullscreen();
-                ui.window().set_fullscreen(!is_fullscreen);
+                // We don't use true fullscreen (see set_maximized comment
+                // in main fn). Toggle maximize state instead so the F11
+                // keybinding still does something coherent on dev.
+                let is_max = ui.window().is_maximized();
+                ui.window().set_maximized(!is_max);
             }
         }
     });

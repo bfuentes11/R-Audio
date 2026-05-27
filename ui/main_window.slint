@@ -32,6 +32,15 @@ export component MainWindow inherits Window {
     min-width: 400px;
     min-height: 300px;
 
+    // no-frame: no titlebar/borders. Combined with set_maximized() (in
+    // src/main.rs, replacing set_fullscreen) this gives us a window that
+    // visually covers the whole screen but is in the *normal* stacking
+    // layer — not the always-on-top fullscreen layer that openbox uses for
+    // _NET_WM_STATE_FULLSCREEN. That layer placement is what was hiding
+    // onboard underneath R-Audio. Borderless-maximized lets onboard sit
+    // on top normally.
+    no-frame: true;
+
     background: @linear-gradient(180deg, #4E1010 0%, #360D68 100%);
 
     in-out property <string> active-view: "home";

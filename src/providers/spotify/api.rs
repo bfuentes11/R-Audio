@@ -593,10 +593,13 @@ impl SpotifyApiService {
 
     pub async fn remove_track_from_liked_songs(&self, track_id: &str) -> Result<(), String> {
         let access_token = self.auth.get_access_token().await?;
+        // /me/library expects `uris` with full Spotify URIs ("spotify:track:ID"),
+        // NOT the classic /me/tracks shape which used `ids` with raw track IDs.
+        let track_uri = format!("spotify:track:{}", track_id);
 
         let response = self.client.clone()
             .delete("https://api.spotify.com/v1/me/library")
-            .query(&[("ids", track_id)])
+            .query(&[("uris", &track_uri)])
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Length", "0")
             .send()
@@ -643,9 +646,14 @@ impl SpotifyApiService {
 
     pub async fn check_track_liked(&self, track_id: &str) -> Result<bool, String> {
         let access_token = self.auth.get_access_token().await?;
+        // /me/library/contains expects `uris` with full Spotify URIs
+        // ("spotify:track:ID"), NOT the classic /me/tracks/contains shape
+        // which used `ids` with raw track IDs. Response is still a JSON
+        // array of booleans in request order.
+        let track_uri = format!("spotify:track:{}", track_id);
         let response = self.client.clone()
             .get("https://api.spotify.com/v1/me/library/contains")
-            .query(&[("ids", track_id)])
+            .query(&[("uris", &track_uri)])
             .header("Authorization", format!("Bearer {}", access_token))
             .send()
             .await

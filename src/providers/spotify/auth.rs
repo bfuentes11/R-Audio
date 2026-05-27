@@ -26,12 +26,31 @@ impl SpotifyAuthManager {
             .expect("Missing RSPOTIFY_CLIENT_ID / RSPOTIFY_CLIENT_SECRET");
 
         let oauth = OAuth::from_env(rspotify::scopes!(
+            // Playback control (read state + send transport commands +
+            // librespot's actual audio streaming).
             "user-read-playback-state",
             "user-modify-playback-state",
             "streaming",
+
+            // Dashboard data sources.
             "user-read-recently-played",
+            "user-top-read",
+
+            // Playlist reading. `playlist-read-collaborative` is required
+            // for /playlists/{id}/items on collaborative playlists — even
+            // ones the user owns; without it the API returns empty items.
             "playlist-read-private",
-            "user-top-read"
+            "playlist-read-collaborative",
+
+            // Playlist editing (add/remove track on a user's own playlists,
+            // both visibility classes since the user may have either).
+            "playlist-modify-private",
+            "playlist-modify-public",
+
+            // Liked Songs library (the heart icon's read state plus
+            // PUT/DELETE /me/library for the toggle).
+            "user-library-read",
+            "user-library-modify"
         )).expect("Missing RSPOTIFY_REDIRECT_URI");
 
         // token_cached: false since we manually serialize and manage multiple users in a single file
