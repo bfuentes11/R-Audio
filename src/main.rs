@@ -1743,58 +1743,46 @@ async fn main() -> Result<(), slint::PlatformError> {
     // handled in Rust instead of in the Slint FocusScope key handler.
     spawn_volume_key_listener(ui.as_weak());
 
-    // ── On-screen keyboard bridge (onboard via D-Bus) ─────────────────────
+    // ── On-screen keyboard bridge (matchbox-keyboard via xdotool) ─────────
     // Slint TextInputs (search bar, Wi-Fi password, device-name) fire
     // request-keyboard(true/false) on focus change. We translate that into
-    // an org.onboard.Onboard.Keyboard.Show / .Hide method call. We use
-    // `dbus-send` rather than a D-Bus crate because the kiosk image already
-    // ships dbus utilities and a one-shot subprocess per focus change is
-    // cheap enough at human-touch latency.
+    // an xdotool windowmap / windowunmap call against the matchbox-keyboard
+    // window. This is dramatically more reliable than the old D-Bus path:
+    // no service activation race, no session bus dependency, no spawn-exec
+    // failure mode when the binary isn't installed (we just no-op
+    // gracefully — the [keyboard] failure log line still tells us).
     ui.on_request_keyboard(|show| {
-        println!("[onboard] request-keyboard({}) fired from Slint", show);
+        println!("[keyboard] request-keyboard({}) fired from Slint", show);
         #[cfg(target_os = "linux")]
         {
-            let method = if show { "Show" } else { "Hide" };
-            // Spawn dbus-send on a blocking helper so we can capture and log
-            // the result — Slint's event loop isn't blocked because we don't
-            // wait for the JoinHandle. If the call fails (onboard not
-            // running, no D-Bus session, wrong service name) the output goes
-            // to the launcher's terminal/log so it's debuggable without SSH.
-            let method = method.to_string();
+            let action = if show { "windowmap" } else { "windowunmap" };
             std::thread::spawn(move || {
-                let result = std::process::Command::new("dbus-send")
-                    .args([
-                        "--print-reply",
-                        "--type=method_call",
-                        "--dest=org.onboard.Onboard",
-                        "/org/onboard/Onboard/Keyboard",
-                        &format!("org.onboard.Onboard.Keyboard.{}", method),
-                    ])
+                let result = std::process::Command::new("xdotool")
+                    .args(["search", "--class", "matchbox-keyboard", "--sync", action, "%@"])
                     .output();
                 match result {
                     Ok(out) if out.status.success() => {
-                        println!("[onboard] {} ok", method);
+                        println!("[keyboard] xdotool {} ok", action);
                     }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let stdout = String::from_utf8_lossy(&out.stdout);
                         eprintln!(
-                            "[onboard] {} failed (exit {:?}):\n  stderr: {}\n  stdout: {}",
-                            method,
-                            out.status.code(),
-                            stderr.trim(),
-                            stdout.trim()
+                            "[keyboard] xdotool {} failed (exit {:?}):\n  stderr: {}\n  stdout: {}",
+                            action, out.status.code(),
+                            stderr.trim(), stdout.trim()
                         );
                     }
                     Err(e) => {
-                        eprintln!("[onboard] dbus-send invocation failed: {}", e);
+                        eprintln!("[keyboard] xdotool invocation failed: {} \
+                            (is xdotool installed? KIOSK_PKGS should include it.)", e);
                     }
                 }
             });
         }
         #[cfg(not(target_os = "linux"))]
         {
-            println!("[onboard] request-keyboard({}) — no-op on non-Linux", show);
+            println!("[keyboard] request-keyboard({}) — no-op on non-Linux", show);
         }
     });
 

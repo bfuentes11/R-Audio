@@ -8,12 +8,12 @@
 # Finally, it starts the main player client ('r-audio').
 # ==============================================================================
 
-# Redirect ALL output (this script + the r-audio binary we exec into at the
-# end) to /tmp/r-audio.log so the Slint Debug tab in Settings can display it
-# on the kiosk screen — the Surface Go 2 has no keyboard, no easy SSH path,
-# so on-screen log viewing is the only diagnostic option. tmpfs clears on
-# reboot, which is fine for live debugging.
-exec > /tmp/r-audio.log 2>&1
+# Append to /tmp/r-audio.log so xinitrc's lines (it truncates the file at
+# the top of its run) are preserved. The Slint Debug tab in Settings reads
+# the same file, so everything from openbox/matchbox-keyboard launch
+# diagnostics through r-audio's runtime logs is visible on-screen — the
+# only diagnostic option on a Surface Go 2 with no keyboard or SSH.
+exec >> /tmp/r-audio.log 2>&1
 
 echo "[launcher] Starting R-Audio Kiosk Boot Manager..."
 

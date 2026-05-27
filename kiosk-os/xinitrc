@@ -2,6 +2,12 @@
 # R-Audio Bare-Metal X11 Startup Script
 # Place this at /home/kiosk/.xinitrc on the target system
 
+# Redirect xinitrc's own output to the same log r-audio uses, so messages
+# from openbox / matchbox-keyboard / our startup diagnostics show up in the
+# on-screen Debug tab. `>` truncates so each session starts with a fresh
+# log; the launcher uses `>>` to append.
+exec > /tmp/r-audio.log 2>&1
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Fix #2 (D-Bus session bus): startx by itself doesn't bring up a session bus,
 # which means:
@@ -29,42 +35,38 @@ if command -v openbox-session >/dev/null 2>&1; then
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Onboard on-screen keyboard.
-# Layout 'Phone' is touch-optimized (large keys, full QWERTY + symbols).
-# Show/hide is driven by R-Audio over D-Bus
-# (org.onboard.Onboard.Keyboard.Show / .Hide) whenever a TextInput in the UI
-# gains/loses focus — see ui.on_request_keyboard in src/main.rs. Slint's old
-# in-tree VirtualKeyboard has been removed in favor of this OS-level kbd.
+# Matchbox on-screen keyboard.
 #
-# Why the wmctrl `add,above` step matters: R-Audio runs fullscreen, which
-# sets _NET_WM_STATE_FULLSCREEN. By EWMH spec (and openbox in particular),
-# fullscreen windows stack above the normal layer — meaning onboard would
-# spawn, be perfectly mapped and responsive to Show/Hide, but render
-# *underneath* R-Audio and be invisible. Marking onboard's window
-# `_NET_WM_STATE_ABOVE` puts it on the always-on-top layer, which sits
-# above the fullscreen layer in openbox's stacking order.
+# We use matchbox-keyboard (not onboard): a lightweight C/GTK2 OSK designed
+# for touchscreen kiosks. It just works without onboard's heavy Python+a11y
+# dep tree (which silently fails to install offline and leaves us with
+# "no such file or directory" when D-Bus tries to spawn it).
 #
-# Startup race: onboard's window can take a few seconds to appear on cold
-# boot (Python + gtk init). Loop until wmctrl finds it, then in one call
-# mark it above AND fire the dbus Hide so it stays out of the way until a
-# text input is focused.
+# Show/hide is driven by R-Audio via xdotool windowmap / windowunmap on the
+# keyboard's X11 window — no D-Bus, no service activation, no spawn race.
+# See ui.on_request_keyboard in src/main.rs for the runtime side.
+#
+# Startup hide loop: matchbox-keyboard starts visible. We wait for its
+# window (xdotool returns non-zero until it exists, so this doubles as the
+# "is matchbox up?" probe), then unmap so it stays hidden until a text
+# input is focused. wmctrl `add,above` keeps it on the always-on-top
+# stacking layer even after R-Audio takes back focus.
 # ──────────────────────────────────────────────────────────────────────────────
-if command -v onboard >/dev/null 2>&1; then
-    onboard --layout=Phone --theme=Nightshade &
+echo "[xinitrc] matchbox-keyboard path: $(command -v matchbox-keyboard || echo 'NOT FOUND')"
+if command -v matchbox-keyboard >/dev/null 2>&1; then
+    matchbox-keyboard > /tmp/matchbox-keyboard.log 2>&1 &
     (
         for i in 1 2 3 4 5 6 7 8; do
             sleep 1
-            # wmctrl returns non-zero if no window matches "Onboard" yet,
-            # so this doubles as our "is onboard up?" probe.
-            if wmctrl -r "Onboard" -b add,above >/dev/null 2>&1; then
-                dbus-send --type=method_call \
-                    --dest=org.onboard.Onboard \
-                    /org/onboard/Onboard/Keyboard \
-                    org.onboard.Onboard.Keyboard.Hide >/dev/null 2>&1
+            if xdotool search --class matchbox-keyboard --sync windowunmap %@ >/dev/null 2>&1; then
+                wmctrl -r "matchbox-keyboard" -b add,above >/dev/null 2>&1
+                echo "[xinitrc] matchbox-keyboard ready (attempt $i)"
                 break
             fi
         done
     ) &
+else
+    echo "[xinitrc] matchbox-keyboard binary not found — on-screen keyboard disabled."
 fi
 
 # Execute the R-Audio launcher.
