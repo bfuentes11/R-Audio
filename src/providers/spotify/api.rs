@@ -221,96 +221,59 @@ impl SpotifyApiService {
     }
 
     pub async fn get_playlist(&self, playlist_id: &str, snapshot_id: &str, cache: &SpotifyCache) -> Result<(String, String, String, Vec<Track>), String> {
-        // Self-heal: if there's a cached entry but its track list is empty,
-        // it's almost certainly a stale write from the old /tracks path
-        // (which silently returned 0 items for some playlists). Drop it
-        // and refetch live. We still serve healthy non-empty caches as
-        // normal, so this doesn't slow steady-state navigation.
+        // Self-heal: an empty cached track list is almost certainly a stale
+        // write from a prior broken fetch. Drop it and refetch live.
+        // Healthy non-empty caches are still served immediately.
         if let Some(cached_data) = cache.get_playlist(playlist_id, snapshot_id).await {
             if !cached_data.3.is_empty() {
                 return Ok(cached_data);
             }
-            println!(
-                "[api] Playlist {} cache hit but tracks empty — refetching live (likely stale).",
-                playlist_id
-            );
         }
 
         let access_token = self.auth.get_access_token().await?;
 
-        // Pass `additional_types=track,episode` so episode-typed entries
-        // round-trip through the response. Without it the API silently
-        // strips episodes from the embedded first page, leaving holes in
-        // the returned items array for playlists that mix podcasts with
-        // music. (We also need `fields` to be unset so we get the full
-        // tracks block.)
-        let url = format!(
-            "https://api.spotify.com/v1/playlists/{}?additional_types=track,episode",
+        // ── 1. Metadata only ──────────────────────────────────────────────
+        // GET /playlists/{id} with `fields=` shaves the response down to just
+        // name/owner/cover/total. We intentionally do NOT read the embedded
+        // first-page tracks block from this response — it has been the
+        // source of the "playlist appears empty" bug because its shape
+        // sometimes diverges from /items. All tracks come from step 2.
+        let meta_url = format!(
+            "https://api.spotify.com/v1/playlists/{}?fields=name,owner(display_name),images,tracks(total,limit)",
             playlist_id
         );
-
-        let res = self.client.clone()
-            .get(&url)
+        let meta_res = self.client.clone()
+            .get(&meta_url)
             .header("Authorization", format!("Bearer {}", access_token))
             .send().await.map_err(|e| e.to_string())?;
+        let meta_json: Value = meta_res.json().await.map_err(|e| e.to_string())?;
 
-        let json: Value = res.json().await.map_err(|e| e.to_string())?;
-
-        let playlist_name = json["name"].as_str().unwrap_or("Selected Playlist").to_string();
-        let owner_name = json["owner"]["display_name"].as_str().unwrap_or("Spotify").to_string();
-
-        let cover_url = json["images"]
+        let playlist_name = meta_json["name"].as_str().unwrap_or("Selected Playlist").to_string();
+        let owner_name = meta_json["owner"]["display_name"].as_str().unwrap_or("Spotify").to_string();
+        let cover_url = meta_json["images"]
             .as_array()
             .and_then(|imgs| imgs.get(0))
             .and_then(|img| img["url"].as_str())
             .unwrap_or("")
             .to_string();
+        let total_tracks = meta_json["tracks"]["total"].as_u64().unwrap_or(0);
+        let limit_hint = meta_json["tracks"]["limit"].as_u64().unwrap_or(50);
+        let items_per_page = if limit_hint == 0 { 50 } else { limit_hint };
 
+        // ── 2. ALL tracks via /items (page 0 onward, in parallel) ─────────
+        // /items is the modern playlist-contents endpoint. We start from
+        // offset=0 so this single code path handles small and large
+        // playlists alike — no special case for "first page embedded
+        // somewhere else".
         let mut tracks = Vec::new();
-
-        let first_page = &json["tracks"];
-        let total_tracks = first_page["total"].as_u64().unwrap_or(0);
-        let limit = first_page["limit"].as_u64().unwrap_or(20);
-        let items_per_page = if limit == 0 { 20 } else { limit };
-
-        println!("[api] Playlist total tracks: {}, limit: {}", total_tracks, items_per_page);
-
-        // Parse first page tracks
-        if let Some(items) = first_page["items"].as_array() {
-            for item_node in items {
-                let t_node = if !item_node["item"].is_null() {
-                    &item_node["item"]
-                } else {
-                    &item_node["track"]
-                };
-                if t_node.is_null() || t_node["id"].is_null() { continue; }
-
-                if let Some(mut track) = SpotifyParser::parse_track_lenient(t_node) {
-                    if track.album_url.is_empty() {
-                        track.album_url = cover_url.clone();
-                    }
-                    tracks.push(track);
-                }
-            }
-        }
-
-        // ── Subsequent pages via /items (not /tracks) ─────────────────────
-        // /items is the modern playlist-contents endpoint: it returns the
-        // same response shape as /tracks but actually surfaces every item
-        // in the playlist. /tracks has been increasingly inconsistent —
-        // some playlists come back empty, some drop episode entries — so
-        // we use /items everywhere for pagination. The first page is
-        // still the embedded `tracks` block in the playlist metadata
-        // response above (saves one round-trip), but `additional_types`
-        // above keeps that consistent with what /items would return.
-        if total_tracks > items_per_page {
-            let num_pages = ((total_tracks - 1) / items_per_page) as u32;
+        if total_tracks > 0 {
+            let num_pages = (total_tracks - 1) / items_per_page + 1;
             let mut join_set = tokio::task::JoinSet::new();
 
-            for page_idx in 1..=num_pages {
-                let offset = page_idx * (items_per_page as u32);
+            for page_idx in 0..num_pages {
+                let offset = page_idx * items_per_page;
                 let url = format!(
-                    "https://api.spotify.com/v1/playlists/{}/items?offset={}&limit={}&additional_types=track,episode",
+                    "https://api.spotify.com/v1/playlists/{}/items?offset={}&limit={}",
                     playlist_id, offset, items_per_page
                 );
                 let client = self.client.clone();
@@ -339,10 +302,16 @@ impl SpotifyApiService {
             for (_, page_json) in pages {
                 if let Some(items) = page_json["items"].as_array() {
                     for item_node in items {
-                        let t_node = if !item_node["item"].is_null() {
+                        // Spotify's actual /items response uses `track` for
+                        // the nested object (the docs say `item`, but the
+                        // wire format is `track`). We try both for safety
+                        // and fall back to the raw element as a last resort.
+                        let t_node = if !item_node["track"].is_null() {
+                            &item_node["track"]
+                        } else if !item_node["item"].is_null() {
                             &item_node["item"]
                         } else {
-                            &item_node["track"]
+                            item_node
                         };
                         if t_node.is_null() || t_node["id"].is_null() { continue; }
 
