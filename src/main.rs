@@ -1743,39 +1743,45 @@ async fn main() -> Result<(), slint::PlatformError> {
     // handled in Rust instead of in the Slint FocusScope key handler.
     spawn_volume_key_listener(ui.as_weak());
 
-    // ── On-screen keyboard bridge (matchbox-keyboard via xdotool) ─────────
+    // ── On-screen keyboard bridge (onboard via D-Bus) ─────────────────────
     // Slint TextInputs (search bar, Wi-Fi password, device-name) fire
     // request-keyboard(true/false) on focus change. We translate that into
-    // an xdotool windowmap / windowunmap call against the matchbox-keyboard
-    // window. This is dramatically more reliable than the old D-Bus path:
-    // no service activation race, no session bus dependency, no spawn-exec
-    // failure mode when the binary isn't installed (we just no-op
-    // gracefully — the [keyboard] failure log line still tells us).
+    // an org.onboard.Onboard.Keyboard.Show / .Hide method call via
+    // dbus-send. If onboard's binary isn't installed, D-Bus service
+    // activation fails with "spawn execfailed" — that goes to stderr (now
+    // captured in /tmp/r-audio.log so the Debug tab can show it) but
+    // doesn't kill anything.
     ui.on_request_keyboard(|show| {
         println!("[keyboard] request-keyboard({}) fired from Slint", show);
         #[cfg(target_os = "linux")]
         {
-            let action = if show { "windowmap" } else { "windowunmap" };
+            let method = if show { "Show" } else { "Hide" };
+            let method = method.to_string();
             std::thread::spawn(move || {
-                let result = std::process::Command::new("xdotool")
-                    .args(["search", "--class", "matchbox-keyboard", "--sync", action, "%@"])
+                let result = std::process::Command::new("dbus-send")
+                    .args([
+                        "--print-reply",
+                        "--type=method_call",
+                        "--dest=org.onboard.Onboard",
+                        "/org/onboard/Onboard/Keyboard",
+                        &format!("org.onboard.Onboard.Keyboard.{}", method),
+                    ])
                     .output();
                 match result {
                     Ok(out) if out.status.success() => {
-                        println!("[keyboard] xdotool {} ok", action);
+                        println!("[keyboard] dbus-send {} ok", method);
                     }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let stdout = String::from_utf8_lossy(&out.stdout);
                         eprintln!(
-                            "[keyboard] xdotool {} failed (exit {:?}):\n  stderr: {}\n  stdout: {}",
-                            action, out.status.code(),
+                            "[keyboard] dbus-send {} failed (exit {:?}):\n  stderr: {}\n  stdout: {}",
+                            method, out.status.code(),
                             stderr.trim(), stdout.trim()
                         );
                     }
                     Err(e) => {
-                        eprintln!("[keyboard] xdotool invocation failed: {} \
-                            (is xdotool installed? KIOSK_PKGS should include it.)", e);
+                        eprintln!("[keyboard] dbus-send invocation failed: {}", e);
                     }
                 }
             });

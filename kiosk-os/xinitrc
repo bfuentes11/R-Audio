@@ -2,17 +2,12 @@
 # R-Audio Bare-Metal X11 Startup Script
 # Place this at /home/kiosk/.xinitrc on the target system
 
-# Redirect xinitrc's own output to the same log r-audio uses, so messages
-# from openbox / matchbox-keyboard / our startup diagnostics show up in the
-# on-screen Debug tab. `>` truncates so each session starts with a fresh
-# log; the launcher uses `>>` to append.
-exec > /tmp/r-audio.log 2>&1
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Fix #2 (D-Bus session bus): startx by itself doesn't bring up a session bus,
 # which means:
-#   • onboard can't register its org.onboard.Onboard service
-#   • r-audio's dbus-send calls to Show/Hide the keyboard have nowhere to go
+#   • matchbox-keyboard can't register its DBus service if we ever need it
+#   • r-audio's wmctrl/xdotool calls go through but background X clients lack
+#     a session bus to talk to each other
 # Re-exec the entire xinitrc body under dbus-run-session the first time
 # through. dbus-run-session starts a private session bus, exports
 # DBUS_SESSION_BUS_ADDRESS into the environment, runs the rest of the script,
@@ -21,6 +16,16 @@ exec > /tmp/r-audio.log 2>&1
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
     exec dbus-run-session -- "$0" "$@"
 fi
+
+# Redirect xinitrc's own output to the same log r-audio uses, so messages
+# from openbox / matchbox-keyboard / our startup diagnostics show up in the
+# on-screen Debug tab. Placed AFTER the dbus-run-session re-exec so we only
+# truncate the file once (in the final invocation), not twice — and so any
+# error from the re-exec itself goes to startx's stderr where it's
+# diagnosable rather than vanishing into a half-initialized log file.
+# `>` truncates so each session starts with a fresh log; the launcher uses
+# `>>` to append.
+exec > /tmp/r-audio.log 2>&1
 
 # Disable screen blanking, screensaver, and DPMS power-saving modes
 xset s off
@@ -35,38 +40,34 @@ if command -v openbox-session >/dev/null 2>&1; then
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Matchbox on-screen keyboard.
+# Onboard on-screen keyboard.
+# Layout 'Phone' is touch-optimized (large keys, full QWERTY + symbols).
+# Show/hide is driven by R-Audio over D-Bus
+# (org.onboard.Onboard.Keyboard.Show / .Hide) whenever a TextInput in the UI
+# gains/loses focus — see ui.on_request_keyboard in src/main.rs.
 #
-# We use matchbox-keyboard (not onboard): a lightweight C/GTK2 OSK designed
-# for touchscreen kiosks. It just works without onboard's heavy Python+a11y
-# dep tree (which silently fails to install offline and leaves us with
-# "no such file or directory" when D-Bus tries to spawn it).
-#
-# Show/hide is driven by R-Audio via xdotool windowmap / windowunmap on the
-# keyboard's X11 window — no D-Bus, no service activation, no spawn race.
-# See ui.on_request_keyboard in src/main.rs for the runtime side.
-#
-# Startup hide loop: matchbox-keyboard starts visible. We wait for its
-# window (xdotool returns non-zero until it exists, so this doubles as the
-# "is matchbox up?" probe), then unmap so it stays hidden until a text
-# input is focused. wmctrl `add,above` keeps it on the always-on-top
-# stacking layer even after R-Audio takes back focus.
+# Startup race: onboard can take several seconds to register its DBus
+# service on a cold boot (Python interpreter spin-up + gtk init), so the
+# first one or two Hide attempts will silently fail. The loop exits on the
+# first success; in steady state this is one cheap dbus-send call.
 # ──────────────────────────────────────────────────────────────────────────────
-echo "[xinitrc] matchbox-keyboard path: $(command -v matchbox-keyboard || echo 'NOT FOUND')"
-if command -v matchbox-keyboard >/dev/null 2>&1; then
-    matchbox-keyboard > /tmp/matchbox-keyboard.log 2>&1 &
+echo "[xinitrc] onboard path: $(command -v onboard || echo 'NOT FOUND')"
+if command -v onboard >/dev/null 2>&1; then
+    onboard --layout=Phone --theme=Nightshade &
     (
-        for i in 1 2 3 4 5 6 7 8; do
-            sleep 1
-            if xdotool search --class matchbox-keyboard --sync windowunmap %@ >/dev/null 2>&1; then
-                wmctrl -r "matchbox-keyboard" -b add,above >/dev/null 2>&1
-                echo "[xinitrc] matchbox-keyboard ready (attempt $i)"
+        for i in 1 2 3 4 5; do
+            sleep 2
+            if dbus-send --type=method_call \
+                --dest=org.onboard.Onboard \
+                /org/onboard/Onboard/Keyboard \
+                org.onboard.Onboard.Keyboard.Hide >/dev/null 2>&1; then
+                echo "[xinitrc] onboard ready (attempt $i)"
                 break
             fi
         done
     ) &
 else
-    echo "[xinitrc] matchbox-keyboard binary not found — on-screen keyboard disabled."
+    echo "[xinitrc] onboard binary not found — on-screen keyboard disabled."
 fi
 
 # Execute the R-Audio launcher.

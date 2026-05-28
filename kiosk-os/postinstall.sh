@@ -110,11 +110,31 @@ cp "$PAYLOAD"/r-audio-debs/*.deb /target/var/cache/r-audio-debs/
 
 # --auto-deconfigure handles installing in dep order; -E skips already-installed.
 # We don't `set -e` around this because some postinst scripts (openbox, etc.)
-# can emit non-fatal warnings that would trip set -e.
-in-target sh -c 'dpkg -i --auto-deconfigure /var/cache/r-audio-debs/*.deb' || {
-    echo "[postinstall] WARNING: dpkg -i reported issues; some packages may have unmet deps."
-    echo "[postinstall] Continuing — the kiosk will still boot and you can investigate post-install."
+# can emit non-fatal warnings that would trip set -e. Capture stdout+stderr
+# to a log file so we can debug install failures post-boot — without this,
+# packages like onboard can silently fail to install and we only notice
+# weeks later when the on-screen keyboard doesn't appear.
+in-target sh -c 'dpkg -i --auto-deconfigure /var/cache/r-audio-debs/*.deb 2>&1 | tee /var/log/r-audio-dpkg.log' || {
+    echo "[postinstall] WARNING: dpkg -i reported issues — see /var/log/r-audio-dpkg.log."
 }
+
+# Some packages may have unpacked but failed to configure (postinst error,
+# dep ordering issue, etc.). dpkg --configure -a retries every unconfigured
+# package, often fixing complex chains like Python+GTK that the initial
+# pass couldn't resolve. Output goes to the same log so we can debug.
+in-target sh -c 'dpkg --configure -a 2>&1 | tee -a /var/log/r-audio-dpkg.log' || {
+    echo "[postinstall] WARNING: dpkg --configure -a still has unconfigured packages."
+}
+
+# Explicit sanity check on the critical kiosk binaries. If any of these are
+# missing the kiosk will boot but lose a feature, and we want to know.
+for bin in /target/usr/bin/onboard /target/usr/bin/wmctrl /target/usr/bin/xdotool /target/usr/bin/openbox-session; do
+    if [ -x "$bin" ]; then
+        echo "[postinstall] OK: $bin"
+    else
+        echo "[postinstall] MISSING: $bin (check /var/log/r-audio-dpkg.log on the kiosk)"
+    fi
+done
 
 # Clean up the deb cache once installed.
 rm -rf /target/var/cache/r-audio-debs
