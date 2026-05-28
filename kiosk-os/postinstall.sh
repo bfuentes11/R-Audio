@@ -31,6 +31,30 @@ echo "[postinstall] Installing kiosk user X11 startup..."
 cp "$PAYLOAD/xinitrc" /target/home/kiosk/.xinitrc
 chmod +x /target/home/kiosk/.xinitrc
 
+# Minimal openbox config — suppresses the "no valid config file" and
+# "no menu.xml" warnings that clutter the log on every boot.
+mkdir -p /target/home/kiosk/.config/openbox
+cat > /target/home/kiosk/.config/openbox/rc.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <resistance><strength>10</strength><screen_edge_strength>20</screen_edge_strength></resistance>
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse><focusLast>yes</focusLast><underMouse>no</underMouse><focusDelay>200</focusDelay><raiseOnFocus>no</raiseOnFocus></focus>
+  <placement><policy>Smart</policy></placement>
+  <theme><name>Clearlooks</name><titleLayout>NLIMC</titleLayout></theme>
+  <desktops><number>1</number><firstdesk>1</firstdesk><names/><popupTime>875</popupTime></desktops>
+  <resize><drawContents>yes</drawContents><popupShow>NonPixel</popupShow></resize>
+  <mouse><dragThreshold>8</dragThreshold><doubleClickTime>200</doubleClickTime><screenEdgeWarpTime>400</screenEdgeWarpTime></mouse>
+  <keyboard/>
+  <applications/>
+</openbox_config>
+EOF
+cat > /target/home/kiosk/.config/openbox/menu.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="Openbox 3" execute=""/>
+</openbox_menu>
+EOF
+
 cat > /target/home/kiosk/.bash_profile <<'EOF'
 # Auto-launch bare Xorg on TTY1 (kiosk path)
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
