@@ -164,7 +164,7 @@ mkdir -p "$DEBS_DIR"
 # Packages the kiosk needs that aren't on Debian DVD1, plus any r-audio
 # runtime libs we want to bundle defensively.
 # Must be ONE line — newlines in the value break the `bash -c` string below.
-KIOSK_PKGS="openbox onboard pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libssl3 dnsmasq-base dbus wmctrl xdotool at-spi2-core dconf-gsettings-backend"
+KIOSK_PKGS="openbox onboard pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libssl3 dnsmasq-base dbus wmctrl xdotool at-spi2-core dconf-gsettings-backend mousetweaks"
 
 # Check for a pre-populated cache (used by CI to skip the docker download).
 # Set R_AUDIO_DEBS_CACHE to a directory path to enable.
