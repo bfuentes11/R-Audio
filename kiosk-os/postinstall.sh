@@ -164,6 +164,18 @@ if [ ! -e /target/usr/bin/python3 ]; then
     fi
 fi
 
+# Recompile GLib schemas. The offline dpkg install doesn't reliably fire the
+# glib-compile-schemas trigger, so onboard's org.onboard schema may be present
+# as XML but absent from gschemas.compiled — which makes `gsettings set` fail
+# with "schema missing" and prevents us tuning onboard's behaviour.
+if in-target sh -c 'command -v glib-compile-schemas >/dev/null 2>&1'; then
+    in-target glib-compile-schemas /usr/share/glib-2.0/schemas \
+        && echo "[postinstall] Recompiled GLib schemas" \
+        || echo "[postinstall] WARNING: glib-compile-schemas failed"
+else
+    echo "[postinstall] WARNING: glib-compile-schemas not found (libglib2.0-bin missing?)"
+fi
+
 # Explicit sanity check on the critical kiosk binaries. If any of these are
 # missing the kiosk will boot but lose a feature, and we want to know.
 for bin in /target/usr/bin/onboard /target/usr/bin/wmctrl /target/usr/bin/xdotool /target/usr/bin/openbox-session /target/usr/bin/python3; do

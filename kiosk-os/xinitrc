@@ -92,14 +92,23 @@ if command -v onboard >/dev/null 2>&1; then
     #  • force-to-top=true — keep onboard above the maximized R-Audio window.
     #  • docking-enabled=true — dock to the bottom edge at a known position so
     #    it can't end up off-screen from a stale saved geometry.
+    # Make sure gsettings can find the system schema dir. A bare startx session
+    # often leaves XDG_DATA_DIRS unset/incomplete, so gsettings can't locate
+    # /usr/share/glib-2.0/schemas even when the compiled cache is present.
+    export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+    case ":$XDG_DATA_DIRS:" in *":/usr/share:"*) ;; *) XDG_DATA_DIRS="$XDG_DATA_DIRS:/usr/share";; esac
+
+    # Diagnostics — tell us definitively where the schema problem is.
+    echo "[xinitrc] XDG_DATA_DIRS=$XDG_DATA_DIRS"
+    echo "[xinitrc] onboard schema files: $(ls /usr/share/glib-2.0/schemas/*onboard* 2>/dev/null | tr '\n' ' ' || echo 'NONE')"
+    echo "[xinitrc] gschemas.compiled: $([ -f /usr/share/glib-2.0/schemas/gschemas.compiled ] && echo present || echo MISSING)"
+    echo "[xinitrc] gsettings sees onboard schemas: $(gsettings list-schemas 2>/dev/null | grep -c onboard) found"
+
     set_ob() {
         gsettings set "$1" "$2" "$3" 2>/dev/null \
             && echo "[xinitrc] onboard set $1 $2=$3" \
             || echo "[xinitrc] WARNING: failed to set $1 $2 (schema missing?)"
     }
-    # Dump available keys once so we can confirm exact names if any set fails.
-    echo "[xinitrc] onboard auto-show keys: $(gsettings list-keys org.onboard.auto-show 2>/dev/null | tr '\n' ' ' || echo 'schema missing')"
-    echo "[xinitrc] onboard window keys: $(gsettings list-keys org.onboard.window 2>/dev/null | tr '\n' ' ' || echo 'schema missing')"
     set_ob org.onboard.auto-show enabled false
     set_ob org.onboard.window force-to-top true
     set_ob org.onboard.window docking-enabled true
