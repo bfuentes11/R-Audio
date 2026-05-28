@@ -150,6 +150,20 @@ in-target sh -c 'dpkg --configure -a 2>&1 | tee -a /var/log/r-audio-dpkg.log' ||
     echo "[postinstall] WARNING: dpkg --configure -a still has unconfigured packages."
 }
 
+# Ensure the /usr/bin/python3 symlink exists. The offline dpkg install can
+# unpack python3.NN without configuring python3-minimal (which ships the
+# unversioned symlink), leaving onboard's "#!/usr/bin/python3" shebang broken.
+# Create it defensively by pointing at the newest installed python3.NN.
+if [ ! -e /target/usr/bin/python3 ]; then
+    PY=$(ls -1 /target/usr/bin/python3.[0-9]* 2>/dev/null | sort -V | tail -n1)
+    if [ -n "$PY" ]; then
+        ln -sf "$(basename "$PY")" /target/usr/bin/python3
+        echo "[postinstall] Created /usr/bin/python3 -> $(basename "$PY")"
+    else
+        echo "[postinstall] WARNING: no python3.NN found — cannot create python3 symlink"
+    fi
+fi
+
 # Explicit sanity check on the critical kiosk binaries. If any of these are
 # missing the kiosk will boot but lose a feature, and we want to know.
 for bin in /target/usr/bin/onboard /target/usr/bin/wmctrl /target/usr/bin/xdotool /target/usr/bin/openbox-session /target/usr/bin/python3; do
