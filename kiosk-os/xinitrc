@@ -32,42 +32,51 @@ xset s off
 xset s noblank
 xset -dpms
 
-# Start a window manager so X11 honors EWMH fullscreen hints from Slint.
-# openbox is installed via the bundled .debs during d-i postinstall, so it's
-# available from the very first boot — no special first-boot handling needed.
-if command -v openbox-session >/dev/null 2>&1; then
-    openbox-session &
-fi
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Onboard on-screen keyboard.
-# Layout 'Phone' is touch-optimized (large keys, full QWERTY + symbols).
-# Show/hide is driven by R-Audio over D-Bus
+# Launched BEFORE the window manager so it has time to register on D-Bus
+# before R-Audio starts. Layout 'Phone' is touch-optimized (large keys,
+# full QWERTY + symbols). Show/hide is driven by R-Audio over D-Bus
 # (org.onboard.Onboard.Keyboard.Show / .Hide) whenever a TextInput in the UI
 # gains/loses focus — see ui.on_request_keyboard in src/main.rs.
 #
 # Startup race: onboard can take several seconds to register its DBus
 # service on a cold boot (Python interpreter spin-up + gtk init), so the
-# first one or two Hide attempts will silently fail. The loop exits on the
-# first success; in steady state this is one cheap dbus-send call.
+# retry loop waits up to 20s. stderr is captured to the log so any GTK/
+# Python crash is visible in the Debug tab.
 # ──────────────────────────────────────────────────────────────────────────────
 echo "[xinitrc] onboard path: $(command -v onboard || echo 'NOT FOUND')"
 if command -v onboard >/dev/null 2>&1; then
-    onboard --layout=Phone --theme=Nightshade &
+    onboard --layout=Phone --theme=Nightshade >>/tmp/r-audio.log 2>&1 &
+    ONBOARD_PID=$!
+    echo "[xinitrc] onboard launched (pid $ONBOARD_PID)"
     (
-        for i in 1 2 3 4 5; do
+        for i in 1 2 3 4 5 6 7 8 9 10; do
             sleep 2
+            # Check if the process is still alive
+            if ! kill -0 "$ONBOARD_PID" 2>/dev/null; then
+                echo "[xinitrc] onboard process died (pid $ONBOARD_PID) — on-screen keyboard disabled"
+                break
+            fi
             if dbus-send --type=method_call \
                 --dest=org.onboard.Onboard \
                 /org/onboard/Onboard/Keyboard \
                 org.onboard.Onboard.Keyboard.Hide >/dev/null 2>&1; then
-                echo "[xinitrc] onboard ready (attempt $i)"
+                echo "[xinitrc] onboard ready and hidden (attempt $i)"
                 break
             fi
+            echo "[xinitrc] onboard not on D-Bus yet (attempt $i/10)..."
         done
     ) &
 else
     echo "[xinitrc] onboard binary not found — on-screen keyboard disabled."
+fi
+
+# Start a window manager so X11 honors EWMH fullscreen hints from Slint.
+# openbox is installed via the bundled .debs during d-i postinstall, so it's
+# available from the very first boot — no special first-boot handling needed.
+if command -v openbox-session >/dev/null 2>&1; then
+    openbox-session &
 fi
 
 # Execute the R-Audio launcher.

@@ -1034,6 +1034,12 @@ fn initialize_audio_player(
                                 }
                                 crate::providers::spotify_player::PlaybackEvent::SessionLost => {
                                     println!("[main] Event: SessionLost — reconnecting in 2s...");
+                                    // Capture resume state HERE. By the time this event
+                                    // arrives, librespot has already set is_playing = false
+                                    // (spotify_player.rs does it before sending SessionLost),
+                                    // so get_is_playing() is always false after the break.
+                                    resume_track = player_arc.current_track_id.lock().await.clone();
+                                    resume_position_ms = current_position_ms;
                                     session_lost = true;
                                     break;
                                 }
@@ -1055,15 +1061,20 @@ fn initialize_audio_player(
                 return;
             }
 
-            // Capture what was playing before we tear down the player.
-            // current_track_id on the player is updated by play(), so it's always
-            // the ground truth even if the event pump didn't see a Playing event yet.
-            if player_arc.get_is_playing().await {
-                resume_track = player_arc.current_track_id.lock().await.clone();
-                resume_position_ms = current_position_ms;
-            } else {
-                resume_track = None;
-                resume_position_ms = 0;
+            // For a pre-emptive reconnect the session is still healthy when we
+            // break, so is_playing is reliable and we capture state here.
+            // For SessionLost the state was already captured inside the event
+            // handler above (librespot sets is_playing=false before sending the
+            // event, so checking it here would always yield false and wipe the
+            // resume position).
+            if preempt_triggered {
+                if player_arc.get_is_playing().await {
+                    resume_track = player_arc.current_track_id.lock().await.clone();
+                    resume_position_ms = current_position_ms;
+                } else {
+                    resume_track = None;
+                    resume_position_ms = 0;
+                }
             }
 
             // Drop the dead/old player from the container before reconnecting.
@@ -1075,18 +1086,15 @@ fn initialize_audio_player(
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             }
 
-            // On a *pre-emptive* reconnect we must force-refresh the token
-            // (the existing one still has ~5 min validity, so the lazy
-            // `get_access_token` would skip the refresh and hand back the
-            // same near-dead token — defeating the whole point of going
-            // around the loop). On a `SessionLost` the token may already be
-            // expired anyway, but force_refresh is safe and idempotent so
-            // we use it for both paths.
-            let refresh_result = if preempt_triggered {
-                spotify_provider.auth.force_refresh_token().await
-            } else {
-                spotify_provider.get_access_token().await
-            };
+            // Always force-refresh the token before rebuilding the librespot
+            // session, regardless of whether this is a pre-emptive reconnect or
+            // a SessionLost. On the pre-emptive path the token still has ~5 min
+            // validity so the lazy get_access_token() would return the same
+            // near-dead token. On the SessionLost path the token may or may not
+            // be expired — force_refresh is safe and idempotent and ensures the
+            // new session starts with a full ~60 min of validity rather than
+            // whatever is left on the old token.
+            let refresh_result = spotify_provider.auth.force_refresh_token().await;
             match refresh_result {
                 Ok(t) => token = t,
                 Err(e) => {
@@ -1744,13 +1752,8 @@ async fn main() -> Result<(), slint::PlatformError> {
     spawn_volume_key_listener(ui.as_weak());
 
     // ── On-screen keyboard bridge (onboard via D-Bus) ─────────────────────
-    // Slint TextInputs (search bar, Wi-Fi password, device-name) fire
-    // request-keyboard(true/false) on focus change. We translate that into
-    // an org.onboard.Onboard.Keyboard.Show / .Hide method call via
-    // dbus-send. If onboard's binary isn't installed, D-Bus service
-    // activation fails with "spawn execfailed" — that goes to stderr (now
-    // captured in /tmp/r-audio.log so the Debug tab can show it) but
-    // doesn't kill anything.
+    // onboard is pre-launched by xinitrc (before r-audio starts) and hidden
+    // via its D-Bus retry loop. We just send Show/Hide here on focus change.
     ui.on_request_keyboard(|show| {
         println!("[keyboard] request-keyboard({}) fired from Slint", show);
         #[cfg(target_os = "linux")]
@@ -1779,6 +1782,29 @@ async fn main() -> Result<(), slint::PlatformError> {
                             method, out.status.code(),
                             stderr.trim(), stdout.trim()
                         );
+                        // If D-Bus can't find onboard, dump the window list so
+                        // we can see whether onboard is running but off-screen,
+                        // not running at all, etc. — without needing a keyboard.
+                        if stderr.contains("spawn.execfailed") || stderr.contains("execfailed") {
+                            eprintln!("[keyboard] spawn.execfailed — dumping window list:");
+                            if let Ok(wm) = std::process::Command::new("wmctrl").arg("-l").output() {
+                                eprintln!("[keyboard] wmctrl -l:\n{}", String::from_utf8_lossy(&wm.stdout));
+                            } else {
+                                eprintln!("[keyboard] wmctrl not available");
+                            }
+                            // Also log running processes that contain "onboard"
+                            if let Ok(ps) = std::process::Command::new("pgrep")
+                                .args(["-a", "onboard"])
+                                .output()
+                            {
+                                let procs = String::from_utf8_lossy(&ps.stdout);
+                                if procs.trim().is_empty() {
+                                    eprintln!("[keyboard] pgrep onboard: NOT RUNNING");
+                                } else {
+                                    eprintln!("[keyboard] pgrep onboard:\n{}", procs.trim());
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         eprintln!("[keyboard] dbus-send invocation failed: {}", e);
