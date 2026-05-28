@@ -69,25 +69,17 @@ fi
 # theme causes an immediate crash with no output. Fallback to bare onboard.
 # ──────────────────────────────────────────────────────────────────────────────
 echo "[xinitrc] onboard path: $(command -v onboard || echo 'NOT FOUND')"
-echo "[xinitrc] onboard layouts: $(ls /usr/share/onboard/layouts/*.onboard 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || echo 'dir not found')"
-echo "[xinitrc] onboard themes: $(ls /usr/share/onboard/themes/*.theme 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || echo 'dir not found')"
 if command -v onboard >/dev/null 2>&1; then
-    # Build args only for layouts/themes that actually exist on disk
+    # Phone layout + Nightshade theme are touch-optimized; fall back to onboard
+    # defaults silently if either isn't present (confirmed working either way).
     ONBOARD_ARGS=""
-    if [ -f /usr/share/onboard/layouts/Phone.onboard ]; then
-        ONBOARD_ARGS="$ONBOARD_ARGS --layout=Phone"
-    else
-        echo "[xinitrc] Phone layout not found — using onboard default layout"
-    fi
-    if ls /usr/share/onboard/themes/Nightshade.theme >/dev/null 2>&1; then
-        ONBOARD_ARGS="$ONBOARD_ARGS --theme=Nightshade"
-    else
-        echo "[xinitrc] Nightshade theme not found — using onboard default theme"
-    fi
-    # Quick sanity check — if Python can't import the onboard module we'll see
-    # the ImportError here rather than a silent crash later.
+    [ -f /usr/share/onboard/layouts/Phone.onboard ] && ONBOARD_ARGS="$ONBOARD_ARGS --layout=Phone"
+    [ -f /usr/share/onboard/themes/Nightshade.theme ] && ONBOARD_ARGS="$ONBOARD_ARGS --theme=Nightshade"
+
+    # Sanity check — onboard is a Python3 app. Report which python3 binaries
+    # actually exist so we can tell "not installed" from "symlink missing".
+    echo "[xinitrc] python3 binaries present: $(ls /usr/bin/python3* 2>/dev/null | tr '\n' ' ' || echo 'NONE')"
     echo "[xinitrc] python3 import check: $(python3 -c 'import onboard' 2>&1 && echo OK)"
-    echo "[xinitrc] fontconfig check: $(fc-list 2>/dev/null | wc -l) fonts available"
 
     # Resolve absolute path once — bare 'onboard' can fail PATH lookup inside
     # subshells depending on how the login chain sets up the environment.
