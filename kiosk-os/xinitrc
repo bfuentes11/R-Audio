@@ -33,6 +33,21 @@ xset s noblank
 xset -dpms
 
 # ──────────────────────────────────────────────────────────────────────────────
+# AT-SPI accessibility bus.
+# Onboard is a Python/GTK accessibility tool — it requires the AT-SPI daemon
+# to be running or it crashes immediately on startup. at-spi2-core is bundled
+# in KIOSK_PKGS but the daemon must be explicitly started; it is not
+# auto-launched on a bare X11/openbox session.
+# ──────────────────────────────────────────────────────────────────────────────
+if [ -x /usr/lib/at-spi2-core/at-spi-bus-launcher ]; then
+    /usr/lib/at-spi2-core/at-spi-bus-launcher --launch-immediately &
+    echo "[xinitrc] at-spi-bus-launcher started"
+    sleep 1
+else
+    echo "[xinitrc] at-spi-bus-launcher not found — onboard may crash"
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Onboard on-screen keyboard.
 # Launched BEFORE the window manager so it has time to register on D-Bus
 # before R-Audio starts. Layout 'Phone' is touch-optimized (large keys,
