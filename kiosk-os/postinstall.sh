@@ -152,13 +152,17 @@ in-target sh -c 'dpkg --configure -a 2>&1 | tee -a /var/log/r-audio-dpkg.log' ||
 
 # Explicit sanity check on the critical kiosk binaries. If any of these are
 # missing the kiosk will boot but lose a feature, and we want to know.
-for bin in /target/usr/bin/onboard /target/usr/bin/wmctrl /target/usr/bin/xdotool /target/usr/bin/openbox-session; do
+for bin in /target/usr/bin/onboard /target/usr/bin/wmctrl /target/usr/bin/xdotool /target/usr/bin/openbox-session /target/usr/bin/python3; do
     if [ -x "$bin" ]; then
         echo "[postinstall] OK: $bin"
     else
         echo "[postinstall] MISSING: $bin (check /var/log/r-audio-dpkg.log on the kiosk)"
     fi
 done
+# Also confirm onboard can be imported by Python — catches partial installs
+# where the binary exists but the Python package is misconfigured.
+in-target python3 -c "import onboard; print('[postinstall] onboard Python import: OK')" 2>&1 || \
+    echo "[postinstall] WARNING: onboard Python import FAILED — on-screen keyboard will not work"
 
 # Clean up the deb cache once installed.
 rm -rf /target/var/cache/r-audio-debs

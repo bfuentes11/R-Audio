@@ -84,6 +84,11 @@ if command -v onboard >/dev/null 2>&1; then
     else
         echo "[xinitrc] Nightshade theme not found — using onboard default theme"
     fi
+    # Quick sanity check — if Python can't import the onboard module we'll see
+    # the ImportError here rather than a silent crash later.
+    echo "[xinitrc] python3 import check: $(python3 -c 'import onboard' 2>&1 && echo OK)"
+    echo "[xinitrc] fontconfig check: $(fc-list 2>/dev/null | wc -l) fonts available"
+
     # Resolve absolute path once — bare 'onboard' can fail PATH lookup inside
     # subshells depending on how the login chain sets up the environment.
     ONBOARD_BIN="$(command -v onboard)"
