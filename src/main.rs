@@ -1773,6 +1773,37 @@ async fn main() -> Result<(), slint::PlatformError> {
                 match result {
                     Ok(out) if out.status.success() => {
                         println!("[keyboard] dbus-send {} ok", method);
+                        // On Show, force the onboard window above R-Audio's
+                        // maximized window. dbus Show succeeds but onboard
+                        // renders *behind* us otherwise (it shows fine when
+                        // nothing else is on screen). Set _NET_WM_STATE_ABOVE
+                        // via wmctrl WITHOUT activating it, so focus stays on
+                        // the R-Audio TextInput and keystrokes land there.
+                        if method == "Show" {
+                            let raise = std::process::Command::new("wmctrl")
+                                .args(["-x", "-r", "onboard.Onboard", "-b", "add,above"])
+                                .output();
+                            match raise {
+                                Ok(r) if r.status.success() => {
+                                    println!("[keyboard] wmctrl raise onboard ok");
+                                }
+                                Ok(r) => {
+                                    eprintln!(
+                                        "[keyboard] wmctrl raise failed (exit {:?}): {}",
+                                        r.status.code(),
+                                        String::from_utf8_lossy(&r.stderr).trim()
+                                    );
+                                    // Fall back to title-substring match in case
+                                    // the WM_CLASS differs on this onboard build.
+                                    let _ = std::process::Command::new("wmctrl")
+                                        .args(["-r", "Onboard", "-b", "add,above"])
+                                        .output();
+                                }
+                                Err(e) => {
+                                    eprintln!("[keyboard] wmctrl not available: {}", e);
+                                }
+                            }
+                        }
                     }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);

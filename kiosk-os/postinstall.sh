@@ -187,7 +187,7 @@ for bin in /target/usr/bin/onboard /target/usr/bin/wmctrl /target/usr/bin/xdotoo
 done
 # Also confirm onboard can be imported by Python — catches partial installs
 # where the binary exists but the Python package is misconfigured.
-in-target python3 -c "import onboard; print('[postinstall] onboard Python import: OK')" 2>&1 || \
+in-target python3 -c "import Onboard; print('[postinstall] onboard Python import: OK')" 2>&1 || \
     echo "[postinstall] WARNING: onboard Python import FAILED — on-screen keyboard will not work"
 
 # Clean up the deb cache once installed.
