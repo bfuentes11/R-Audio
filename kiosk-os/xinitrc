@@ -80,12 +80,29 @@ if command -v onboard >/dev/null 2>&1; then
     # lowercase 'onboard' is just the executable script.
     echo "[xinitrc] python3 import check: $(python3 -c 'import Onboard' 2>&1 && echo OK)"
 
-    # Force onboard's window to stay above R-Audio. Without this, Show succeeds
-    # over D-Bus but the keyboard renders *behind* the maximized R-Audio window
-    # and is invisible. force-to-top keeps it in the top stacking layer.
-    gsettings set org.onboard.window force-to-top true 2>/dev/null \
-        && echo "[xinitrc] onboard force-to-top enabled" \
-        || echo "[xinitrc] WARNING: could not set onboard force-to-top (schema missing?)"
+    # ── Onboard behaviour settings (gsettings → dconf) ────────────────────────
+    # These make onboard obey OUR manual D-Bus Show/Hide and render where we
+    # can see it. Applied before launch so onboard reads them at startup.
+    #
+    #  • auto-show.enabled=false — CRITICAL. With auto-show on, onboard uses
+    #    AT-SPI to detect focused editable widgets and shows/hides itself.
+    #    R-Audio is a Slint app, so its TextInputs are invisible to AT-SPI;
+    #    onboard sees "nothing editable focused" and re-hides immediately after
+    #    our D-Bus Show. Disabling it makes Show/Hide authoritative.
+    #  • force-to-top=true — keep onboard above the maximized R-Audio window.
+    #  • docking-enabled=true — dock to the bottom edge at a known position so
+    #    it can't end up off-screen from a stale saved geometry.
+    set_ob() {
+        gsettings set "$1" "$2" "$3" 2>/dev/null \
+            && echo "[xinitrc] onboard set $1 $2=$3" \
+            || echo "[xinitrc] WARNING: failed to set $1 $2 (schema missing?)"
+    }
+    # Dump available keys once so we can confirm exact names if any set fails.
+    echo "[xinitrc] onboard auto-show keys: $(gsettings list-keys org.onboard.auto-show 2>/dev/null | tr '\n' ' ' || echo 'schema missing')"
+    echo "[xinitrc] onboard window keys: $(gsettings list-keys org.onboard.window 2>/dev/null | tr '\n' ' ' || echo 'schema missing')"
+    set_ob org.onboard.auto-show enabled false
+    set_ob org.onboard.window force-to-top true
+    set_ob org.onboard.window docking-enabled true
 
     # Resolve absolute path once — bare 'onboard' can fail PATH lookup inside
     # subshells depending on how the login chain sets up the environment.
