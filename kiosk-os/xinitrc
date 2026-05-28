@@ -76,10 +76,16 @@ if command -v onboard >/dev/null 2>&1; then
     [ -f /usr/share/onboard/layouts/Phone.onboard ] && ONBOARD_ARGS="$ONBOARD_ARGS --layout=Phone"
     [ -f /usr/share/onboard/themes/Nightshade.theme ] && ONBOARD_ARGS="$ONBOARD_ARGS --theme=Nightshade"
 
-    # Sanity check — onboard is a Python3 app. Report which python3 binaries
-    # actually exist so we can tell "not installed" from "symlink missing".
-    echo "[xinitrc] python3 binaries present: $(ls /usr/bin/python3* 2>/dev/null | tr '\n' ' ' || echo 'NONE')"
-    echo "[xinitrc] python3 import check: $(python3 -c 'import onboard' 2>&1 && echo OK)"
+    # Sanity check — the onboard Python package is 'Onboard' (capital O); the
+    # lowercase 'onboard' is just the executable script.
+    echo "[xinitrc] python3 import check: $(python3 -c 'import Onboard' 2>&1 && echo OK)"
+
+    # Force onboard's window to stay above R-Audio. Without this, Show succeeds
+    # over D-Bus but the keyboard renders *behind* the maximized R-Audio window
+    # and is invisible. force-to-top keeps it in the top stacking layer.
+    gsettings set org.onboard.window force-to-top true 2>/dev/null \
+        && echo "[xinitrc] onboard force-to-top enabled" \
+        || echo "[xinitrc] WARNING: could not set onboard force-to-top (schema missing?)"
 
     # Resolve absolute path once — bare 'onboard' can fail PATH lookup inside
     # subshells depending on how the login chain sets up the environment.
