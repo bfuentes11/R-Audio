@@ -35,42 +35,68 @@ xset -dpms
 # ──────────────────────────────────────────────────────────────────────────────
 # AT-SPI accessibility bus.
 # Onboard is a Python/GTK accessibility tool — it requires the AT-SPI daemon
-# to be running or it crashes immediately on startup. at-spi2-core is bundled
-# in KIOSK_PKGS but the daemon must be explicitly started; it is not
-# auto-launched on a bare X11/openbox session.
+# to be running or it crashes immediately on startup. The launcher path moved
+# between Debian releases; search all known locations.
 # ──────────────────────────────────────────────────────────────────────────────
-if [ -x /usr/lib/at-spi2-core/at-spi-bus-launcher ]; then
-    /usr/lib/at-spi2-core/at-spi-bus-launcher --launch-immediately &
-    echo "[xinitrc] at-spi-bus-launcher started"
+AT_SPI_LAUNCHER=""
+for _p in \
+    /usr/lib/at-spi2-core/at-spi-bus-launcher \
+    /usr/libexec/at-spi-bus-launcher \
+    /usr/lib/x86_64-linux-gnu/at-spi2-core/at-spi-bus-launcher; do
+    if [ -x "$_p" ]; then
+        AT_SPI_LAUNCHER="$_p"
+        break
+    fi
+done
+if [ -n "$AT_SPI_LAUNCHER" ]; then
+    "$AT_SPI_LAUNCHER" --launch-immediately &
+    echo "[xinitrc] at-spi-bus-launcher started: $AT_SPI_LAUNCHER"
     sleep 1
 else
-    echo "[xinitrc] at-spi-bus-launcher not found — onboard may crash"
+    echo "[xinitrc] at-spi-bus-launcher not found in any known path — onboard may crash"
+    # Log all files from at-spi2-core to help diagnose the correct path
+    echo "[xinitrc] at-spi2-core contents: $(dpkg -L at-spi2-core 2>/dev/null | grep launcher || echo 'dpkg query failed')"
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Onboard on-screen keyboard.
 # Launched BEFORE the window manager so it has time to register on D-Bus
-# before R-Audio starts. Layout 'Phone' is touch-optimized (large keys,
-# full QWERTY + symbols). Show/hide is driven by R-Audio over D-Bus
+# before R-Audio starts. Show/hide is driven by R-Audio over D-Bus
 # (org.onboard.Onboard.Keyboard.Show / .Hide) whenever a TextInput in the UI
 # gains/loses focus — see ui.on_request_keyboard in src/main.rs.
 #
-# Startup race: onboard can take several seconds to register its DBus
-# service on a cold boot (Python interpreter spin-up + gtk init), so the
-# retry loop waits up to 20s. stderr is captured to the log so any GTK/
-# Python crash is visible in the Debug tab.
+# Layout/theme: verify they exist before passing them — an unknown layout or
+# theme causes an immediate crash with no output. Fallback to bare onboard.
 # ──────────────────────────────────────────────────────────────────────────────
 echo "[xinitrc] onboard path: $(command -v onboard || echo 'NOT FOUND')"
+echo "[xinitrc] onboard layouts: $(ls /usr/share/onboard/layouts/*.onboard 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || echo 'dir not found')"
+echo "[xinitrc] onboard themes: $(ls /usr/share/onboard/themes/*.theme 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ' || echo 'dir not found')"
 if command -v onboard >/dev/null 2>&1; then
-    onboard --layout=Phone --theme=Nightshade >>/tmp/r-audio.log 2>&1 &
+    # Build args only for layouts/themes that actually exist on disk
+    ONBOARD_ARGS=""
+    if [ -f /usr/share/onboard/layouts/Phone.onboard ]; then
+        ONBOARD_ARGS="$ONBOARD_ARGS --layout=Phone"
+    else
+        echo "[xinitrc] Phone layout not found — using onboard default layout"
+    fi
+    if ls /usr/share/onboard/themes/Nightshade.theme >/dev/null 2>&1; then
+        ONBOARD_ARGS="$ONBOARD_ARGS --theme=Nightshade"
+    else
+        echo "[xinitrc] Nightshade theme not found — using onboard default theme"
+    fi
+    echo "[xinitrc] launching: onboard $ONBOARD_ARGS"
+    # shellcheck disable=SC2086
+    onboard $ONBOARD_ARGS > /tmp/onboard.log 2>&1 &
     ONBOARD_PID=$!
     echo "[xinitrc] onboard launched (pid $ONBOARD_PID)"
     (
         for i in 1 2 3 4 5 6 7 8 9 10; do
             sleep 2
-            # Check if the process is still alive
+            # Check if the process is still alive; dump its log if it died
             if ! kill -0 "$ONBOARD_PID" 2>/dev/null; then
                 echo "[xinitrc] onboard process died (pid $ONBOARD_PID) — on-screen keyboard disabled"
+                echo "[xinitrc] onboard crash output:"
+                cat /tmp/onboard.log
                 break
             fi
             if dbus-send --type=method_call \
