@@ -156,6 +156,13 @@ export component VirtualKeyboard inherits Rectangle {
     drop-shadow-blur: 24px;
     drop-shadow-offset-y: -4px;
 
+    // Catch-all: absorb taps that land in the gaps between keys (and anywhere on
+    // the keyboard background) so they don't fall through to whatever is behind
+    // the keyboard — e.g. the search-results list or the Wi-Fi network list —
+    // which would otherwise trigger those elements and yank focus off the field
+    // we're typing into. (This is the pattern from the Slint example.)
+    TouchArea {}
+
     VerticalLayout {
         padding: 12px;
         spacing: 6px;
