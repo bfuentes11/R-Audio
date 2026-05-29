@@ -1,0 +1,195 @@
+import { TextManip } from "../../globals.slint";
+
+component KeyButton inherits Rectangle {
+    in property <string> label;
+    in property <length> key-width: 46px;
+    in property <length> key-height: 48px;
+    callback clicked(string);
+
+    width: key-width;
+    height: key-height;
+    border-radius: 8px;
+
+    background: touch.pressed ? #00000066 : (touch.has-hover ? #ffffff1a : #00000033);
+    border-width: 1px;
+    border-color: touch.has-hover ? #ffffff33 : #ffffff11;
+
+    drop-shadow-color: #00000040;
+    drop-shadow-blur: touch.has-hover ? 8px : 4px;
+    drop-shadow-offset-y: touch.has-hover ? 4px : 2px;
+
+    animate background { duration: 150ms; }
+    animate border-color { duration: 150ms; }
+
+    Text {
+        text: root.label;
+        color: white;
+        font-size: 16px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(root.label) }
+        mouse-cursor: pointer;
+    }
+}
+
+export component VirtualKeyboard inherits Rectangle {
+    in-out property <string> text: "";
+    in-out property <int> cursor-pos: 0;
+    in property <string> enter-label: "Enter";
+
+    callback accepted();
+
+    // Flag to suppress cursor-reset when we are the ones changing text
+    property <bool> self-updating: false;
+
+    // When text is set externally (not by us), reset cursor to end
+    changed text => {
+        if (!root.self-updating) {
+            root.cursor-pos = TextManip.char-count(root.text);
+        }
+    }
+
+    background: #1a1a2e;
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    border-width: 1px;
+    border-color: #ffffff18;
+    drop-shadow-color: #00000088;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: -4px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 8px;
+        alignment: center;
+
+        // Number Row
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            for num in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"] : KeyButton {
+                label: num;
+                clicked(c) => {
+                    root.self-updating = true;
+                    root.text = TextManip.get-before-cursor(root.text, root.cursor-pos) + c + TextManip.get-after-cursor(root.text, root.cursor-pos);
+                    root.cursor-pos = root.cursor-pos + 1;
+                    root.self-updating = false;
+                }
+            }
+        }
+
+        // QWERTY Row 1
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            for char in ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"] : KeyButton {
+                label: char;
+                clicked(c) => {
+                    root.self-updating = true;
+                    root.text = TextManip.get-before-cursor(root.text, root.cursor-pos) + c + TextManip.get-after-cursor(root.text, root.cursor-pos);
+                    root.cursor-pos = root.cursor-pos + 1;
+                    root.self-updating = false;
+                }
+            }
+        }
+
+        // QWERTY Row 2
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            for char in ["A", "S", "D", "F", "G", "H", "J", "K", "L"] : KeyButton {
+                label: char;
+                clicked(c) => {
+                    root.self-updating = true;
+                    root.text = TextManip.get-before-cursor(root.text, root.cursor-pos) + c + TextManip.get-after-cursor(root.text, root.cursor-pos);
+                    root.cursor-pos = root.cursor-pos + 1;
+                    root.self-updating = false;
+                }
+            }
+        }
+
+        // QWERTY Row 3
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            for char in ["Z", "X", "C", "V", "B", "N", "M"] : KeyButton {
+                label: char;
+                clicked(c) => {
+                    root.self-updating = true;
+                    root.text = TextManip.get-before-cursor(root.text, root.cursor-pos) + c + TextManip.get-after-cursor(root.text, root.cursor-pos);
+                    root.cursor-pos = root.cursor-pos + 1;
+                    root.self-updating = false;
+                }
+            }
+        }
+
+        // Control Row: Clear | ← | Space | → | ⌫ | Enter
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+
+            KeyButton {
+                label: "Clear";
+                key-width: 70px;
+                clicked(_) => {
+                    root.self-updating = true;
+                    root.text = "";
+                    root.cursor-pos = 0;
+                    root.self-updating = false;
+                }
+            }
+
+            KeyButton {
+                label: "←";
+                key-width: 46px;
+                clicked(_) => {
+                    if (root.cursor-pos > 0) {
+                        root.cursor-pos = root.cursor-pos - 1;
+                    }
+                }
+            }
+
+            KeyButton {
+                label: " ";
+                key-width: 180px;
+                clicked(_) => {
+                    root.self-updating = true;
+                    root.text = TextManip.get-before-cursor(root.text, root.cursor-pos) + " " + TextManip.get-after-cursor(root.text, root.cursor-pos);
+                    root.cursor-pos = root.cursor-pos + 1;
+                    root.self-updating = false;
+                }
+            }
+
+            KeyButton {
+                label: "→";
+                key-width: 46px;
+                clicked(_) => {
+                    root.cursor-pos = Math.min(root.cursor-pos + 1, TextManip.char-count(root.text));
+                }
+            }
+
+            KeyButton {
+                label: "⌫";
+                key-width: 60px;
+                clicked(_) => {
+                    if (root.cursor-pos > 0) {
+                        root.self-updating = true;
+                        root.text = TextManip.get-before-cursor(root.text, root.cursor-pos - 1) + TextManip.get-after-cursor(root.text, root.cursor-pos);
+                        root.cursor-pos = root.cursor-pos - 1;
+                        root.self-updating = false;
+                    }
+                }
+            }
+
+            KeyButton {
+                label: root.enter-label;
+                key-width: 90px;
+                clicked(_) => { root.accepted(); }
+            }
+        }
+    }
+}
