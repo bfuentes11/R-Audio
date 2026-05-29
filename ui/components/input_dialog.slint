@@ -1,0 +1,83 @@
+import { LineEdit } from "std-widgets.slint";
+
+// Reusable centered text-entry dialog.
+//
+// MUST be instantiated at the WINDOW ROOT (alongside the VirtualKeyboard), not
+// nested inside a page: a control nested in the page has its first tap consumed
+// by Slint's focus-dismiss while the on-screen keyboard is up, so its buttons
+// would need two taps. Top-level overlays don't have that problem.
+//
+// The card (and its LineEdit) live behind `if root.open` so the LineEdit's
+// `init => self.focus()` runs every time the dialog opens — which raises the
+// keyboard. Closing the dialog destroys the LineEdit, clearing focus and
+// hiding the keyboard automatically, so callers only flip `open`.
+export component TextInputDialog inherits Rectangle {
+    in property <bool> open;
+    in property <string> title;
+    in property <string> placeholder;
+    in property <string> confirm-label: "OK";
+    // Reserve the keyboard's height so the card centers in the space above it.
+    in property <length> keyboard-height: 320px;
+    in-out property <string> text;
+
+    callback confirmed();
+    callback cancelled();
+
+    if root.open : Rectangle {
+        // Dimmed backdrop that also blocks taps to the content behind.
+        background: #000000aa;
+        TouchArea {}
+
+        Rectangle {
+            width: min(420px, parent.width - 48px);
+            height: 232px;
+            x: (parent.width - self.width) / 2;
+            y: max(20px, (parent.height - root.keyboard-height - self.height) / 2);
+            background: #1e1f2b;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #ffffff1f;
+            drop-shadow-color: #000000aa;
+            drop-shadow-blur: 30px;
+            drop-shadow-offset-y: 8px;
+
+            VerticalLayout {
+                padding: 22px;
+                spacing: 16px;
+
+                Text {
+                    text: root.title;
+                    color: white; font-size: 17px; font-weight: 700;
+                    horizontal-alignment: center; overflow: elide;
+                }
+
+                LineEdit {
+                    placeholder-text: root.placeholder;
+                    font-size: 15px;
+                    text <=> root.text;
+                    init => { self.focus(); }
+                    accepted => { root.confirmed(); }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Rectangle {
+                        horizontal-stretch: 1; height: 44px; border-radius: 22px;
+                        background: cancel-t.has-hover ? #ffffff22 : #ffffff14;
+                        Text { text: "Cancel"; color: white; font-size: 14px; font-weight: 700;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                        cancel-t := TouchArea { mouse-cursor: pointer; clicked => { root.cancelled(); } }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1; height: 44px; border-radius: 22px;
+                        background: confirm-t.has-hover ? #1ED760 : #1DB954;
+                        Text { text: root.confirm-label; color: #06140c; font-size: 14px; font-weight: 800;
+                               horizontal-alignment: center; vertical-alignment: center; }
+                        confirm-t := TouchArea { mouse-cursor: pointer; clicked => { root.confirmed(); } }
+                    }
+                }
+            }
+        }
+    }
+}

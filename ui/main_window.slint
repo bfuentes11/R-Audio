@@ -1,5 +1,6 @@
-import { ScrollView, VerticalBox } from "std-widgets.slint";
-import { VirtualKeyboardHandler } from "components/keyboard/virtual_keyboard.slint";
+import { ScrollView, VerticalBox, LineEdit } from "std-widgets.slint";
+import { VirtualKeyboardHandler, VirtualKeyboard } from "components/keyboard/virtual_keyboard.slint";
+import { TextInputDialog } from "components/input_dialog.slint";
 import { ProviderCard } from "components/provider_card.slint";
 import {
     SpotifySearch,
@@ -156,6 +157,16 @@ export component MainWindow inherits Window {
     callback settings-connect-bluetooth(string);
     callback settings-refresh-debug-log();
     callback settings-clear-debug-log();
+
+    // Wi-Fi password dialog state. Rendered at the WINDOW ROOT (below) so its
+    // Connect/Cancel buttons act on a single tap even while the keyboard is up —
+    // controls nested inside the page get their first tap consumed by Slint's
+    // focus-dismiss, but top-level overlays (like the keyboard itself) do not.
+    in-out property <string> wifi-modal-ssid;        // non-empty ⇒ dialog open
+    in-out property <string> wifi-modal-password;
+    // Device-name dialog (also top-level for one-tap buttons).
+    in-out property <bool> device-modal-open;
+    in-out property <string> device-modal-name;
 
     // Player Bar Properties
     in property <bool> player-is-playing: false;
@@ -524,7 +535,15 @@ export component MainWindow inherits Window {
                 go-back => { root.active-view = "home"; }
                 scan-wifi => { root.settings-scan-wifi(); }
                 connect-wifi(ssid, pwd) => { root.settings-connect-wifi(ssid, pwd); }
+                open-wifi-password(ssid) => {
+                    root.wifi-modal-password = "";
+                    root.wifi-modal-ssid = ssid;
+                }
                 update-device-name(name) => { root.settings-update-device-name(name); }
+                open-device-name => {
+                    root.device-modal-name = root.settings-current-device-name;
+                    root.device-modal-open = true;
+                }
                 scan-bluetooth => { root.settings-scan-bluetooth(); }
                 connect-bluetooth(mac) => { root.settings-connect-bluetooth(mac); }
                 refresh-debug-log => { root.settings-refresh-debug-log(); }
@@ -579,12 +598,22 @@ export component MainWindow inherits Window {
         }
 
         // --- SPOTIFY SEARCH ---
+        // Same explicit-positioning treatment as the album/artist views.
+        // Using width:100%;height:100% on SpotifySearch lets Slint propagate
+        // the preferred-height of its children (nav + search bar, ~140 px)
+        // back through the layout and occasionally resolve the Rectangle to
+        // that smaller content size instead of filling the available stretch
+        // space. Pinning x/y/width/height to parent dimensions guarantees
+        // the component always fills the wrapper regardless of content height.
         if active-view == "spotify-search": Rectangle {
             vertical-stretch: 1;
             clip: true;
             SpotifySearch {
-                width: 100%;
-                height: 100%;
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                keyboard-height: TextInputInterface.text-input-focused ? 320px : 0px;
                 search-results: root.spotify-search-results;
                 has-more: root.spotify-has-more;
                 go-back => {
@@ -658,6 +687,130 @@ export component MainWindow inherits Window {
                 }
                 open-artist-album(id) => {
                     root.open-album-by-id(id)
+                }
+            }
+        }
+
+        // --- SPOTIFY NO-WIFI ERROR ---
+        // Shown instead of launching pairing when wifi-connected is false.
+        // Prevents any Cloudflare / SSE request from being attempted offline.
+        if active-view == "spotify-no-wifi": VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            padding: 20px;
+
+            Rectangle {
+                width: 580px;
+                height: 320px;
+                background: #ffffff0b;
+                border-width: 1px;
+                border-color: #ffffff15;
+                border-radius: 20px;
+                clip: true;
+
+                // Subtle gradient shimmer
+                Rectangle {
+                    width: 100%; height: 100%;
+                    background: @linear-gradient(135deg, #ffffff06 0%, #ffffff00 100%);
+                    border-radius: 20px;
+                }
+
+                VerticalLayout {
+                    padding: 40px;
+                    spacing: 20px;
+                    alignment: center;
+
+                    // Icon + heading row
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 14px;
+
+                        // WiFi-off icon (circle with X)
+                        Rectangle {
+                            width: 48px; height: 48px; border-radius: 24px;
+                            background: #ff555520;
+                            border-width: 1px; border-color: #ff555540;
+                            Text {
+                                text: "✕";
+                                color: #ff7070;
+                                font-size: 22px;
+                                font-weight: 800;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 4px;
+                            Text {
+                                text: "No Internet Connection";
+                                color: white;
+                                font-size: 22px;
+                                font-weight: 800;
+                            }
+                            Text {
+                                text: "SPOTIFY SETUP";
+                                color: #ff7070;
+                                font-size: 10px;
+                                font-weight: 700;
+                                letter-spacing: 2px;
+                            }
+                        }
+                    }
+
+                    // Body text
+                    Text {
+                        text: "R-Audio needs a Wi-Fi connection to pair with Spotify.\nConnect to a network in Settings, then try again.";
+                        color: #ffffffaa;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                    }
+
+                    // Buttons
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 12px;
+
+                        // Go to Settings
+                        Rectangle {
+                            width: 180px; height: 42px;
+                            background: no-wifi-settings-touch.pressed ? #1a7a3a : (no-wifi-settings-touch.has-hover ? #1DB95430 : #1DB95418);
+                            border-width: 1px; border-color: #1DB95470;
+                            border-radius: 12px;
+                            animate background { duration: 120ms; }
+                            Text {
+                                text: "Go to Settings";
+                                color: #1DB954;
+                                font-size: 14px; font-weight: 700;
+                                horizontal-alignment: center; vertical-alignment: center;
+                            }
+                            no-wifi-settings-touch := TouchArea {
+                                clicked => { root.active-view = "settings"; }
+                                mouse-cursor: pointer;
+                            }
+                        }
+
+                        // Back to Home
+                        Rectangle {
+                            width: 120px; height: 42px;
+                            background: no-wifi-back-touch.pressed ? #333 : (no-wifi-back-touch.has-hover ? #ffffff18 : #ffffff0a);
+                            border-width: 1px; border-color: #ffffff18;
+                            border-radius: 12px;
+                            animate background { duration: 120ms; }
+                            Text {
+                                text: "Go Back";
+                                color: #ffffff88;
+                                font-size: 14px; font-weight: 700;
+                                horizontal-alignment: center; vertical-alignment: center;
+                            }
+                            no-wifi-back-touch := TouchArea {
+                                clicked => { root.active-view = "home"; }
+                                mouse-cursor: pointer;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -986,11 +1139,14 @@ export component MainWindow inherits Window {
         }
     }
 
-    FocusScope {
+    root-focus := FocusScope {
         enabled: true;
         init => {
             self.focus();
-        } // Capture focus on startup
+        } // Capture focus on startup (also used to dismiss the on-screen
+          // keyboard: focusing this blurs any TextInput, so
+          // TextInputInterface.text-input-focused → false and the keyboard
+          // slides away).
         key-pressed(event) => {
             if (event.text == Key.F11) {
                 root.toggle-fullscreen();
@@ -1008,6 +1164,70 @@ export component MainWindow inherits Window {
             // same player-volume property and invokes player-change-volume.
             return reject;
         }
+    }
+
+    // ── Top-level text-entry dialogs ──────────────────────────────────────
+    // All three live at the window root (alongside the keyboard) so their
+    // Connect/Apply/Search/Cancel buttons act in a single tap with the keyboard
+    // up. Closing a dialog (open ⇒ false) destroys its LineEdit, which clears
+    // focus and slides the keyboard away automatically.
+
+    // Wi-Fi password — opened by tapping a network in Settings → Wi-Fi.
+    TextInputDialog {
+        width: 100%;
+        height: 100%;
+        open: root.wifi-modal-ssid != "";
+        title: "Connect to " + root.wifi-modal-ssid;
+        placeholder: "Password";
+        confirm-label: "Connect";
+        text <=> root.wifi-modal-password;
+        confirmed => {
+            root.settings-connect-wifi(root.wifi-modal-ssid, root.wifi-modal-password);
+            root.wifi-modal-ssid = "";
+        }
+        cancelled => {
+            root.wifi-modal-password = "";
+            root.wifi-modal-ssid = "";
+        }
+    }
+
+    // Device hostname — opened by tapping the field in Settings → Device Name.
+    TextInputDialog {
+        width: 100%;
+        height: 100%;
+        open: root.device-modal-open;
+        title: "Device Name";
+        placeholder: "Enter device hostname";
+        confirm-label: "Apply";
+        text <=> root.device-modal-name;
+        confirmed => {
+            root.settings-update-device-name(root.device-modal-name);
+            root.device-modal-open = false;
+        }
+        cancelled => { root.device-modal-open = false; }
+    }
+
+    // ── On-screen keyboard ────────────────────────────────────────────────
+    // Single shared instance at the ROOT of the window, exactly as the Slint
+    // virtual_keyboard example prescribes ("place it as the last item in the
+    // root component"). Visibility is driven by the built-in
+    // TextInputInterface.text-input-focused global, which Slint sets true
+    // whenever ANY TextInput in the window has focus and false when focus is
+    // lost — so the keyboard slides up on focus and down on blur automatically,
+    // with no per-screen wiring. Key taps are routed to the focused TextInput
+    // by the Rust on_key_pressed handler (synchronous dispatch_event).
+    VirtualKeyboard {
+        x: 0;
+        width: parent.width;
+        height: 320px;
+        y: TextInputInterface.text-input-focused
+            ? parent.height - self.height
+            : parent.height;
+        animate y { duration: 300ms; easing: ease-out; }
+
+        // ▾ button: move focus off the text field, which clears
+        // TextInputInterface.text-input-focused and hides the keyboard.
+        close => { root-focus.focus(); }
     }
 
     // ── Boot splash overlay ───────────────────────────────────────────────

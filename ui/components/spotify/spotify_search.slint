@@ -1,5 +1,4 @@
 import { ScrollView, HorizontalBox, VerticalBox, LineEdit } from "std-widgets.slint";
-import { VirtualKeyboard } from "../keyboard/virtual_keyboard.slint";
 
 export struct UITrack {
     title: string,
@@ -14,6 +13,9 @@ export component SpotifySearch inherits Rectangle {
     in property <[UITrack]> search-results: [];
     in property <bool> has-more: false;
     in-out property <string> search-query: "";
+    // Height of the virtual keyboard overlay so the results Flickable can
+    // shrink its visible area to stay above the keyboard.
+    in property <length> keyboard-height: 0px;
 
     callback search-music(string);
     callback go-back();
@@ -21,24 +23,21 @@ export component SpotifySearch inherits Rectangle {
     callback load-more();
     callback open-artist(string);
 
-    // In-process Slint keyboard slide state.
-    property <bool> keyboard-visible: false;
-    property <length> keyboard-height: 310px;
-
-    private property <length> text-input-margin: 1rem;
+    // Focusing this (zero-size) scope blurs the search field, clearing
+    // TextInputInterface.text-input-focused and dismissing the keyboard.
+    dismiss := FocusScope {}
 
     VerticalBox {
         width: 100%;
-        // Shrink the body to sit ABOVE the keyboard while it's open so the
-        // search field and results aren't covered.
-        height: root.keyboard-visible ? root.height - root.keyboard-height : root.height;
+        height: 100%;
         spacing: 20px;
-
-        animate height { duration: 300ms; easing: ease-out; }
         padding-top: 12px;
-        padding-bottom: 12px;
+        // Slide content up when the virtual keyboard is visible so nothing
+        // is hidden behind the 320 px overlay. Animated to track the keyboard.
+        padding-bottom: root.keyboard-height + 12px;
         padding-left: 20px;
         padding-right: 20px;
+        animate padding-bottom { duration: 300ms; easing: ease-out; }
 
         // --- Nav Bar ---
         HorizontalBox {
@@ -54,9 +53,9 @@ export component SpotifySearch inherits Rectangle {
                     width: 18px; height: 18px; colorize: #ffffffcc;
                 }
                 touch-back := TouchArea {
-                    clicked => {
-                        root.keyboard-visible = false;
-                        root.go-back();
+                    // pointer-down so a single tap works while the keyboard is up.
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) { root.go-back(); }
                     }
                     mouse-cursor: pointer;
                 }
@@ -73,63 +72,19 @@ export component SpotifySearch inherits Rectangle {
             }
         }
 
-        // --- Custom Glass Search Bar ---
+        // --- Search Bar ---
         HorizontalLayout {
             spacing: 15px;
             height: 48px;
 
-            Rectangle {
+            search_input := LineEdit {
                 horizontal-stretch: 1;
-                border-radius: 24px;
-                background: #ffffff1a;
-                border-width: 1px;
-                border-color: root.keyboard-visible ? #1DB954 : #ffffff33;
-                clip: true;
-
-                // Tap zone below the visuals: declared FIRST in source so it
-                // renders BELOW Text + TextInput. Taps on the placeholder-text
-                // region fall through to this TouchArea, which focuses
-                // search_input and slides the on-screen keyboard up.
-                TouchArea {
-                    clicked => {
-                        search_input.focus();
-                        root.keyboard-visible = true;
-                    }
-                }
-
-                if root.search-query == "" : Text {
-                    x: 20px; text: "What do you want to listen to?";
-                    color: #ffffff66; font-size: 16px;
-                    vertical-alignment: center; height: parent.height; font-weight: 600;
-                }
-
-                search_input := TextInput {
-                    x: 20px;
-                    width: max(parent.width - 40px, self.preferred-width);
-                    height: parent.height;
-                    vertical-alignment: center;
-                    font-size: 16px;
-                    color: white;
-                    single-line: true;
-                    text <=> root.search-query;
-                    accepted => {
-                        root.keyboard-visible = false;
-                        root.search-music(root.search-query);
-                    }
-                    // Slide the keyboard up when the input gains focus.
-                    changed has-focus => {
-                        if (self.has-focus) {
-                            root.keyboard-visible = true;
-                        }
-                    }
-                    cursor-position-changed(cursorPos) => {
-                        // Handle text scrolling so cursor stays visible
-                        if cursorPos.x + self.x < root.text-input-margin {
-                            self.x = - cursorPos.x + root.text-input-margin;
-                        } else if cursorPos.x + self.x > parent.width - root.text-input-margin - self.text-cursor-width {
-                            self.x = parent.width - cursorPos.x - root.text-input-margin - self.text-cursor-width;
-                        }
-                    }
+                placeholder-text: "What do you want to listen to?";
+                font-size: 16px;
+                text <=> root.search-query;
+                accepted => {
+                    dismiss.focus();
+                    root.search-music(root.search-query);
                 }
             }
         }
@@ -192,10 +147,7 @@ export component SpotifySearch inherits Rectangle {
                                             x: 0;
                                             enabled: track.artist-id != "";
                                             mouse-cursor: track.artist-id != "" ? pointer : default;
-                                            clicked => {
-                                                root.keyboard-visible = false;
-                                                root.open-artist(track.artist-id);
-                                            }
+                                            clicked => { root.open-artist(track.artist-id); }
                                         }
                                     }
                                 }
@@ -208,10 +160,7 @@ export component SpotifySearch inherits Rectangle {
                         }
 
                         touch := TouchArea {
-                            clicked => {
-                                root.keyboard-visible = false;
-                                root.play-track(track.id);
-                            }
+                            clicked => { root.play-track(track.id); }
                             mouse-cursor: pointer;
                         }
                     }
@@ -225,28 +174,14 @@ export component SpotifySearch inherits Rectangle {
                         border-width: 1px; border-color: touch-more.has-hover ? #ffffff66 : #ffffff33;
 
                         Text { text: "LOAD MORE"; color: white; font-size: 12px; font-weight: 700; letter-spacing: 2px; horizontal-alignment: center; vertical-alignment: center; }
-                        touch-more := TouchArea { clicked => { root.load-more() } mouse-cursor: pointer; }
+                        touch-more := TouchArea {
+                            clicked => { root.load-more(); }
+                            mouse-cursor: pointer;
+                        }
                     }
                 }
             }
         }
     }
 
-    // --- Sliding Keyboard Overlay ---
-    // Keystrokes are injected into search_input by the Rust side, so Enter (⏎)
-    // fires its `accepted` (→ search-music) and editing keys just work. We only
-    // manage show/hide here.
-    keyboard := VirtualKeyboard {
-        x: 0;
-        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
-        width: root.width;
-        height: root.keyboard-height;
-
-        close => { root.keyboard-visible = false; }
-
-        animate y {
-            duration: 300ms;
-            easing: ease-out;
-        }
-    }
 }

@@ -27,13 +27,12 @@ export component BootSplash {
         pulse-phase = 360deg;
     }
 
-    // ── Frosted overlay ───────────────────────────────────────────────────
-    // Darkens the animated orbs behind so they read as muted colour through
-    // "frosted glass" rather than competing with the splash content.
+    // ── Solid overlay ─────────────────────────────────────────────────────
+    // Opaque dark background so the home view does not show through during boot.
     Rectangle {
         width: 100%; height: 100%;
         background: #090f1c;
-        opacity: 0.86;
+        opacity: 1.0;
     }
 
     // ── Glow blob (behind logo) ───────────────────────────────────────────

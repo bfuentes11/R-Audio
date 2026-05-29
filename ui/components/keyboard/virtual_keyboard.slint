@@ -12,24 +12,56 @@
 
 component VirtualKeyboardButton inherits Rectangle {
     in property <string> key;
+    // Function/modifier keys (esc, tab, shift, ⌫, ⏎, ?123, ▾, arrows) get a
+    // flatter, dimmer fill so the letter/number keys stand out as the primary
+    // targets.
+    in property <bool> accent;
+    // Highlighted "on" state — used for the shift key while shift is active.
+    in property <bool> active;
     callback key-pressed(/* key */ string);
 
-    min-width: 34px;
-    min-height: 46px;
+    min-width: 40px;
+    min-height: 52px;
     horizontal-stretch: 0;
     border-radius: 8px;
 
-    background: i-touch.pressed ? #00000066 : (i-touch.has-hover ? #ffffff1a : #00000033);
+    // Subtle raised keycap: a gentle top-to-bottom gradient reads as a physical
+    // key. Letter/number keys sit a shade lighter than the recessed function
+    // keys. Pressed = flat + darker (pushed in); the active shift uses the brand
+    // green as the single accent.
+    background: root.active
+        ? @linear-gradient(180deg, #1ED760 0%, #1DB954 100%)
+        : i-touch.pressed
+            ? #1b1d26
+            : root.accent
+                ? @linear-gradient(180deg, #262833 0%, #20222c 100%)
+                : @linear-gradient(180deg, #353845 0%, #2c2f3a 100%);
     border-width: 1px;
-    border-color: i-touch.has-hover ? #ffffff33 : #ffffff11;
+    border-color: root.active ? #25e065 : #00000055;
 
-    animate background { duration: 120ms; }
+    // Faint raised shadow.
+    drop-shadow-color: #00000066;
+    drop-shadow-blur: 2px;
+    drop-shadow-offset-y: 1px;
 
-    Text {
+    animate background, border-color { duration: 90ms; easing: ease-out; }
+
+    // Hairline top highlight for the keycap "bevel".
+    Rectangle {
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height / 2;
+        border-radius: parent.border-radius - 1px;
+        background: i-touch.pressed ? transparent : #ffffff0a;
+    }
+
+    i-label := Text {
         text: root.key;
-        color: white;
-        font-size: 16px;
-        font-weight: 600;
+        color: root.active
+            ? #06140c
+            : (root.accent ? #aab0c0 : #f3f4f7);
+        font-size: 18px;
+        font-weight: 500;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -147,14 +179,14 @@ export component VirtualKeyboard inherits Rectangle {
 
     callback close();
 
-    background: #1a1a2e;
-    border-top-left-radius: 20px;
-    border-top-right-radius: 20px;
-    border-width: 1px;
-    border-color: #ffffff18;
-    drop-shadow-color: #00000088;
-    drop-shadow-blur: 24px;
-    drop-shadow-offset-y: -4px;
+    // Restrained dark panel — a deep, near-flat gradient with a crisp rounded
+    // top and a single hairline divider. Reads like a system keyboard tray.
+    background: @linear-gradient(180deg, #1a1c26 0%, #141520 100%);
+    border-top-left-radius: 18px;
+    border-top-right-radius: 18px;
+    drop-shadow-color: #000000aa;
+    drop-shadow-blur: 36px;
+    drop-shadow-offset-y: -8px;
 
     // Catch-all: absorb taps that land in the gaps between keys (and anywhere on
     // the keyboard background) so they don't fall through to whatever is behind
@@ -163,26 +195,29 @@ export component VirtualKeyboard inherits Rectangle {
     // we're typing into. (This is the pattern from the Slint example.)
     TouchArea {}
 
+    // Hairline top divider for a clean tray edge.
+    Rectangle {
+        y: 0;
+        height: 1px;
+        width: parent.width;
+        background: #ffffff14;
+    }
+
     VerticalLayout {
-        padding: 12px;
-        spacing: 6px;
+        padding: 14px;
+        padding-top: 16px;
+        spacing: 8px;
         alignment: center;
 
         for row[index] in VirtualKeyboardHandler.keys : HorizontalLayout {
-            spacing: 6px;
+            spacing: 8px;
             alignment: center;
 
-            if (index == 0) : VirtualKeyboardButton {
-                key: "esc";
-                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Escape); }
-            }
-            if (index == 1) : VirtualKeyboardButton {
-                key: "tab";
-                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Tab); }
-            }
             // shift (left)
             if (index == 2) : VirtualKeyboardButton {
                 key: "⇧";
+                accent: true;
+                active: root.shift;
                 key-pressed => { root.shift = !root.shift; }
             }
 
@@ -196,29 +231,35 @@ export component VirtualKeyboard inherits Rectangle {
 
             if (index == 0) : VirtualKeyboardButton {
                 key: "⌫";
+                accent: true;
                 key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Backspace); }
             }
             if (index == 1) : VirtualKeyboardButton {
                 key: "⏎";
+                accent: true;
                 key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Return); }
             }
             // shift (right)
             if (index == 2) : VirtualKeyboardButton {
                 key: "⇧";
+                accent: true;
+                active: root.shift;
                 key-pressed => { root.shift = !root.shift; }
             }
         }
 
         HorizontalLayout {
-            spacing: 6px;
+            spacing: 8px;
             alignment: center;
 
             VirtualKeyboardButton {
                 key: "▾";
+                accent: true;
                 key-pressed => { root.close(); }
             }
             VirtualKeyboardButton {
                 key: VirtualKeyboardHandler.current-key-set == 0 ? "?123" : "ABC";
+                accent: true;
                 key-pressed => {
                     VirtualKeyboardHandler.switch-keyboard();
                     root.shift = false;
@@ -234,10 +275,12 @@ export component VirtualKeyboard inherits Rectangle {
             }
             VirtualKeyboardButton {
                 key: "←";
+                accent: true;
                 key-pressed => { VirtualKeyboardHandler.key-pressed(Key.LeftArrow); }
             }
             VirtualKeyboardButton {
                 key: "→";
+                accent: true;
                 key-pressed => { VirtualKeyboardHandler.key-pressed(Key.RightArrow); }
             }
         }

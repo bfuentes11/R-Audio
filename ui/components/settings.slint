@@ -1,5 +1,4 @@
-import { ScrollView, HorizontalBox, VerticalBox } from "std-widgets.slint";
-import { VirtualKeyboard } from "keyboard/virtual_keyboard.slint";
+import { ScrollView, HorizontalBox, VerticalBox, Spinner } from "std-widgets.slint";
 
 export struct UIWifiNetwork {
     ssid: string,
@@ -25,14 +24,16 @@ export component Settings inherits Rectangle {
     // callback; cleared via clear-debug-log.
     in property <string> debug-log-content: "";
 
-    in-out property <string> device-name: "";
-    in-out property <string> wifi-password: "";
     in-out property <string> selected-ssid: "";
 
     callback go-back();
     callback scan-wifi();
     callback connect-wifi(string, string);
+    // Ask the host (MainWindow) to open the top-level Wi-Fi password dialog.
+    callback open-wifi-password(string);
     callback update-device-name(string);
+    // Ask the host (MainWindow) to open the top-level device-name dialog.
+    callback open-device-name();
     callback scan-bluetooth();
     callback connect-bluetooth(string);
     callback backspace-pressed(string) -> string;
@@ -44,33 +45,40 @@ export component Settings inherits Rectangle {
 
     property <string> active-tab: "wifi";
 
-    // In-process Slint keyboard slide state. The keyboard injects key events
-    // into whichever TextInput has focus, so there's no per-field text
-    // routing — we only toggle its visibility here.
-    property <bool> keyboard-visible: false;
-    property <length> keyboard-height: 320px;
+    // Wi-Fi auto-scan: when the Wi-Fi tab opens we kick off a scan immediately
+    // and then repeat a couple more times a few seconds apart (like a phone's
+    // Wi-Fi screen), since networks trickle in. `wifi-scan-tick` counts how many
+    // scans have been started in the current visit; a Timer drives the repeats
+    // until WIFI-SCAN-MAX is reached.
+    property <int> wifi-scan-tick: 0;
+    property <int> wifi-scan-max: 3;
+    // True while the auto-scan burst is in progress (drives the spinner so it
+    // stays visible across the gaps between individual scans).
+    property <bool> wifi-auto-scanning: root.active-tab == "wifi" && root.wifi-scan-tick < root.wifi-scan-max;
 
-    init => {
-        root.device-name = root.current-device-name;
+    function start-wifi-autoscan() {
+        root.wifi-scan-tick = 1;
+        root.scan-wifi();
     }
 
-    // Dismiss the keyboard when switching to the Bluetooth tab (no inputs).
+    init => {
+        if (root.active-tab == "wifi") {
+            root.start-wifi-autoscan();
+        }
+    }
+
+    // Re-arm the auto-scan burst each time the user switches back to Wi-Fi.
     changed active-tab => {
-        if (root.active-tab == "bluetooth") {
-            root.keyboard-visible = false;
+        if (root.active-tab == "wifi") {
+            root.start-wifi-autoscan();
         }
     }
 
     VerticalBox {
         width: 100%;
-        // Shrink the whole settings body to sit ABOVE the keyboard while it's
-        // open, so the focused text field is never covered. The keyboard slides
-        // over the bottom `keyboard-height` px otherwise.
-        height: root.keyboard-visible ? root.height - root.keyboard-height : root.height;
+        height: 100%;
         spacing: 16px;
         padding: 20px;
-
-        animate height { duration: 300ms; easing: ease-out; }
 
         // --- Nav Header ---
         HorizontalLayout {
@@ -89,9 +97,9 @@ export component Settings inherits Rectangle {
                         width: 18px; height: 18px; colorize: #ffffffcc;
                     }
                     touch-back := TouchArea {
-                        clicked => {
-                            root.keyboard-visible = false;
-                            root.go-back();
+                        // pointer-down so one tap works even with the keyboard up.
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down) { root.go-back(); }
                         }
                         mouse-cursor: pointer;
                     }
@@ -141,9 +149,12 @@ export component Settings inherits Rectangle {
                         }
                         TouchArea {
                             mouse-cursor: pointer;
-                            clicked => {
-                                root.active-tab = "wifi";
-                                root.keyboard-visible = false;
+                            // Act on pointer-down so a single tap works even while
+                            // a text field is focused (the keyboard is up). With
+                            // `clicked`, the focus-out triggered by the press
+                            // swallows the first tap.
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) { root.active-tab = "wifi"; }
                             }
                         }
                     }
@@ -159,9 +170,8 @@ export component Settings inherits Rectangle {
                         }
                         TouchArea {
                             mouse-cursor: pointer;
-                            clicked => {
-                                root.active-tab = "device";
-                                root.keyboard-visible = false;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) { root.active-tab = "device"; }
                             }
                         }
                     }
@@ -175,7 +185,12 @@ export component Settings inherits Rectangle {
                             font-size: 14px; font-weight: 700;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
-                        TouchArea { mouse-cursor: pointer; clicked => { root.active-tab = "bluetooth"; } }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) { root.active-tab = "bluetooth"; }
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -189,10 +204,11 @@ export component Settings inherits Rectangle {
                         }
                         TouchArea {
                             mouse-cursor: pointer;
-                            clicked => {
-                                root.active-tab = "debug";
-                                root.keyboard-visible = false;
-                                root.refresh-debug-log();
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) {
+                                    root.active-tab = "debug";
+                                    root.refresh-debug-log();
+                                }
                             }
                         }
                     }
@@ -214,14 +230,39 @@ export component Settings inherits Rectangle {
                 padding: 16px;
                 spacing: 12px;
 
+                // Repeatedly re-scan a few times after entering the tab so
+                // slowly-appearing networks show up without a manual refresh.
+                Timer {
+                    interval: 2.5s;
+                    running: root.active-tab == "wifi" && root.wifi-scan-tick < root.wifi-scan-max;
+                    triggered => {
+                        root.wifi-scan-tick += 1;
+                        root.scan-wifi();
+                    }
+                }
+
                 HorizontalLayout {
                     alignment: space-between;
-                    Text { text: "Select a Network"; color: white; font-size: 16px; font-weight: 700; }
-                    if root.wifi-scanning : Text { text: "Scanning…"; color: #1DB954; font-size: 13px; }
-                    if !root.wifi-scanning : Rectangle {
-                        width: 70px; height: 24px; border-radius: 12px; background: #ffffff15;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: "Select a Network";
+                            color: white; font-size: 16px; font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                        if root.wifi-scanning || root.wifi-auto-scanning : Spinner {
+                            indeterminate: true;
+                            width: 18px;
+                            height: 18px;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 70px; height: 24px; border-radius: 12px;
+                        background: refresh-touch.has-hover ? #ffffff22 : #ffffff15;
                         Text { text: "Refresh"; color: white; font-size: 11px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea { mouse-cursor: pointer; clicked => { root.scan-wifi(); } }
+                        refresh-touch := TouchArea { mouse-cursor: pointer; clicked => { root.scan-wifi(); } }
                     }
                 }
 
@@ -248,65 +289,9 @@ export component Settings inherits Rectangle {
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.selected-ssid = net.ssid;
-                                    root.keyboard-visible = false;
+                                    // Open the top-level password dialog.
+                                    root.open-wifi-password(net.ssid);
                                 }
-                            }
-                        }
-                    }
-                }
-
-                if root.selected-ssid != "" : HorizontalLayout {
-                    spacing: 12px;
-                    height: 44px;
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        border-radius: 8px;
-                        background: #00000040;
-                        border-width: 1px;
-                        border-color: wifi-input.has-focus ? #1DB954 : #ffffff20;
-
-                        if root.wifi-password == "" : Text {
-                            x: 12px; text: "Password for " + root.selected-ssid;
-                            color: #ffffff50; font-size: 14px; vertical-alignment: center; height: 100%;
-                        }
-
-                        wifi-focus := FocusScope {
-                            forward-focus: wifi-input;
-                            x: 12px; width: parent.width - 24px; height: 100%;
-                            wifi-input := TextInput {
-                                width: 100%; height: 100%;
-                                font-size: 14px; color: white;
-                                vertical-alignment: center;
-                                text <=> root.wifi-password;
-                                single-line: true;
-                                accepted => {
-                                    root.keyboard-visible = false;
-                                    root.connect-wifi(root.selected-ssid, root.wifi-password);
-                                }
-                                changed has-focus => {
-                                    if (self.has-focus) {
-                                        root.keyboard-visible = true;
-                                    }
-                                }
-                            }
-                        }
-                        TouchArea {
-                            clicked => {
-                                wifi-focus.focus();
-                                root.keyboard-visible = true;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: 100px; border-radius: 8px; background: #1DB954;
-                        Text { text: "CONNECT"; color: white; font-size: 13px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.keyboard-visible = false;
-                                root.connect-wifi(root.selected-ssid, root.wifi-password);
                             }
                         }
                     }
@@ -330,59 +315,30 @@ export component Settings inherits Rectangle {
                     horizontal-alignment: center;
                 }
 
+                // Tapping the field opens the top-level edit dialog (so its
+                // Apply/Cancel buttons act in one tap with the keyboard up).
                 HorizontalLayout {
                     alignment: center;
                     Rectangle {
                         width: 320px; height: 48px; border-radius: 8px;
-                        background: #00000040;
-                        border-width: 1px;
-                        border-color: device-input.has-focus ? #1DB954 : #ffffff20;
+                        background: dev-tap.has-hover ? #00000060 : #00000040;
+                        border-width: 1px; border-color: #ffffff20;
 
-                        if root.device-name == "" : Text {
-                            x: 16px; text: "Enter device hostname";
-                            color: #ffffff50; font-size: 14px; vertical-alignment: center; height: 100%;
+                        Text {
+                            x: 16px;
+                            text: root.current-device-name != "" ? root.current-device-name : "Enter device hostname";
+                            color: root.current-device-name != "" ? white : #ffffff50;
+                            font-size: 16px; vertical-alignment: center; height: 100%;
                         }
-
-                        device-focus := FocusScope {
-                            forward-focus: device-input;
-                            x: 16px; width: parent.width - 32px; height: 100%;
-                            device-input := TextInput {
-                                width: 100%; height: 100%;
-                                font-size: 16px; color: white;
-                                vertical-alignment: center;
-                                text <=> root.device-name;
-                                single-line: true;
-                                accepted => {
-                                    root.keyboard-visible = false;
-                                    root.update-device-name(root.device-name);
-                                }
-                                changed has-focus => {
-                                    if (self.has-focus) {
-                                        root.keyboard-visible = true;
-                                    }
-                                }
-                            }
+                        Text {
+                            x: parent.width - self.width - 16px;
+                            text: "Edit";
+                            color: #1DB954; font-size: 13px; font-weight: 700;
+                            vertical-alignment: center; height: 100%;
                         }
-                        TouchArea {
-                            clicked => {
-                                device-focus.focus();
-                                root.keyboard-visible = true;
-                            }
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 180px; height: 44px; border-radius: 22px; background: #1DB954;
-                        Text { text: "APPLY NAME"; color: white; font-size: 14px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea {
+                        dev-tap := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => {
-                                root.keyboard-visible = false;
-                                root.update-device-name(root.device-name);
-                            }
+                            clicked => { root.open-device-name(); }
                         }
                     }
                 }
@@ -518,21 +474,4 @@ export component Settings inherits Rectangle {
         }
     }
 
-    // --- Sliding Keyboard Overlay ---
-    // Keystrokes are injected into the focused TextInput by the Rust side, so
-    // Enter (⏎) fires that input's `accepted` (→ connect-wifi / update-device-
-    // name) and Backspace/arrows just work. We only manage show/hide here.
-    keyboard := VirtualKeyboard {
-        x: 0;
-        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
-        width: root.width;
-        height: root.keyboard-height;
-
-        close => { root.keyboard-visible = false; }
-
-        animate y {
-            duration: 300ms;
-            easing: ease-out;
-        }
-    }
 }

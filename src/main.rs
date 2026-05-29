@@ -1820,8 +1820,15 @@ async fn main() -> Result<(), slint::PlatformError> {
     // characters as their literal string, special keys as Slint Key.* codes
     // (Backspace, Return, arrows, etc.). We dispatch a synthetic
     // KeyPressed/KeyReleased pair at the window so it lands in whichever
-    // TextInput currently holds focus, exactly like a real keyboard. This is
-    // the approach from Slint's own virtual_keyboard example.
+    // TextInput currently holds focus.
+    //
+    // Dispatched SYNCHRONOUSLY inside the callback (exactly like Slint's own
+    // virtual_keyboard example). The key fires from the keyboard button's
+    // pointer-event handler, so we're still inside Slint's pointer-down
+    // processing — the focused TextInput has NOT yet been blurred, and the
+    // synthetic key lands in it correctly. Deferring this to a later event-loop
+    // tick instead makes it run after the focus has been cleared, so the key
+    // goes nowhere.
     VirtualKeyboardHandler::get(&ui).on_key_pressed({
         let weak = ui.as_weak();
         move |key| {
@@ -3617,19 +3624,14 @@ async fn main() -> Result<(), slint::PlatformError> {
         // ── Startup checks (run while the splash is visible) ─────────────
         let first_run = is_first_run();
 
-        let has_internet = if first_run {
-            tokio::task::spawn_blocking(oobe_check_internet)
-                .await
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        let is_valid = if !first_run {
+        // Always look for a saved, valid Spotify session so returning users land
+        // straight on their dashboard. The forced first-run onboarding (Wi-Fi
+        // hotspot QR + Spotify pairing QR) has been removed: Wi-Fi is now
+        // configured from Settings using the on-screen keyboard, and Spotify is
+        // paired on demand from the home screen's provider card.
+        let is_valid = {
             let provider = &*init_spotify;
             provider.auth.is_session_valid().await
-        } else {
-            false
         };
 
         // ── Wait out whatever remains of the minimum display time ─────────
@@ -3644,26 +3646,25 @@ async fn main() -> Result<(), slint::PlatformError> {
         // splash before the OOBE or dashboard view actually loads. Switching
         // first means the right view is already rendered under the opaque
         // splash when the fade begins, so the cross-dissolve is seamless.
-        if first_run {
-            println!("[main] First run detected.");
-            if has_internet {
-                println!("[main] Internet already reachable — skipping Wi-Fi OOBE, going to Spotify pairing.");
-                start_pairing_flow(init_ui.clone(), init_spotify.clone(), init_player.clone(), go_next_clone.clone());
-            } else {
-                println!("[main] No internet — showing Wi-Fi OOBE welcome screen.");
-                let _ = slint::invoke_from_event_loop({
-                    let h = init_ui.clone();
-                    move || {
-                        if let Some(ui) = h.upgrade() {
-                            ui.set_active_view("oobe-welcome".into());
-                        }
-                    }
-                });
-            }
-        } else if is_valid {
+        if is_valid {
+            println!("[main] Valid Spotify session — going straight to the dashboard.");
             run_authenticated_startup(init_ui.clone(), init_spotify.clone(), init_player.clone(), go_next_clone.clone(), false).await;
         } else {
-            println!("[main] Session is invalid/empty. User is on home/landing screen.");
+            println!("[main] No valid session — landing on the home screen.");
+            let _ = slint::invoke_from_event_loop({
+                let h = init_ui.clone();
+                move || {
+                    if let Some(ui) = h.upgrade() {
+                        ui.set_active_view("home".into());
+                    }
+                }
+            });
+        }
+
+        // We no longer branch on first-run, but still record the marker the
+        // first time so the flag file exists (harmless if it already did).
+        if first_run {
+            mark_setup_complete();
         }
 
         // Give Slint one tick to apply the view switch + any pending UI
@@ -3694,9 +3695,32 @@ async fn main() -> Result<(), slint::PlatformError> {
         let player = Arc::clone(&player_provider_clone);
         let go_next = go_next_provider_clone.clone();
 
+        // Read wifi state synchronously here — we're already on the Slint thread
+        // inside an on_XXX callback, so this is safe and avoids an extra event-loop hop.
+        let is_wifi_connected = {
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.get_wifi_connected()
+            } else {
+                false
+            }
+        };
+
         tokio::spawn(async move {
             let cache = crate::providers::spotify::auth::SpotifyAuthManager::load_multi_cache();
             if cache.users.is_empty() {
+                // No cached accounts: pairing is required. Gate it on wifi.
+                if !is_wifi_connected {
+                    println!("[main] No wifi — showing no-wifi error instead of launching pairing.");
+                    let _ = slint::invoke_from_event_loop({
+                        let h = ui_handle.clone();
+                        move || {
+                            if let Some(ui) = h.upgrade() {
+                                ui.set_active_view("spotify-no-wifi".into());
+                            }
+                        }
+                    });
+                    return;
+                }
                 start_pairing_flow(ui_handle.clone(), spotify.clone(), player.clone(), go_next.clone());
             } else {
                 // Check if we already have an active authenticated session
