@@ -194,6 +194,16 @@ in-target python3 -c "import Onboard; print('[postinstall] onboard Python import
 rm -rf /target/var/cache/r-audio-debs
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Power Management — configure power button to suspend (sleep) instead of poweroff.
+# ──────────────────────────────────────────────────────────────────────────────
+echo "[postinstall] Configuring power button to suspend (sleep) instead of poweroff..."
+mkdir -p /target/etc/systemd/logind.conf.d
+cat > /target/etc/systemd/logind.conf.d/kiosk.conf <<'EOF'
+[Login]
+HandlePowerKey=suspend
+EOF
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Boot appearance — suppress all kernel/systemd console output and hide GRUB.
 # No Plymouth: the screen goes black immediately after GRUB and stays black
 # until r-audio's own Slint UI takes over. This is cleaner and simpler than

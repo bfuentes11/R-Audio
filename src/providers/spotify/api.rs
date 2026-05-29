@@ -614,7 +614,7 @@ impl SpotifyApiService {
 
     pub async fn add_track_to_playlist(&self, track_id: &str, playlist_id: &str) -> Result<String, String> {
         let access_token = self.auth.get_access_token().await?;
-        let url = format!("https://api.spotify.com/v1/playlists/{}/tracks", playlist_id);
+        let url = format!("https://api.spotify.com/v1/playlists/{}/items", playlist_id);
         let track_uri = format!("spotify:track:{}", track_id);
         println!("[api] POST {} body uris=[{}]", url, track_uri);
 
@@ -672,15 +672,15 @@ impl SpotifyApiService {
 
     pub async fn remove_track_from_playlist(&self, track_id: &str, playlist_id: &str) -> Result<String, String> {
         let access_token = self.auth.get_access_token().await?;
-        let url = format!("https://api.spotify.com/v1/playlists/{}/tracks", playlist_id);
+        let url = format!("https://api.spotify.com/v1/playlists/{}/items", playlist_id);
         let track_uri = format!("spotify:track:{}", track_id);
-        println!("[api] DELETE {} body tracks=[{}]", url, track_uri);
+        println!("[api] DELETE {} body items=[{}]", url, track_uri);
 
         let response = self.client.clone()
             .delete(&url)
             .header("Authorization", format!("Bearer {}", access_token))
             .json(&serde_json::json!({
-                "tracks": [{ "uri": track_uri }]
+                "items": [{ "uri": track_uri }]
             }))
             .send()
             .await

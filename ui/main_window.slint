@@ -47,6 +47,12 @@ export component MainWindow inherits Window {
 
     in-out property <string> active-view: "home";
     in-out property <bool> player-expanded: false;
+    in-out property <bool> screensaver-active: false;
+    property <bool> screensaver-exiting: false;
+    callback invoke-sleep();
+    callback invoke-poweroff();
+    property <bool> screensaver-dragging: false;
+    property <length> screensaver-drag-offset: 0px;
 
     // ── Status pill auto-hide ─────────────────────────────────────────────
     // The Wi-Fi/battery pill shows for 5 s on startup or whenever the user
@@ -68,6 +74,31 @@ export component MainWindow inherits Window {
         triggered => {
             root.pill-visible = false;
         }
+    }
+
+    // ── Screensaver timer ─────────────────────────────────────────────────
+    // Fires after 60 s of inactivity. Toggling screensaver-active false
+    // (on dismiss) sets running back to true, restarting the countdown.
+    screensaver-timer := Timer {
+        interval: 5s;
+        running: !root.screensaver-active;
+        triggered => { root.screensaver-active = true; }
+    }
+    // Fires after the slide-up animation completes, then clears both flags.
+    // The snap from -height back to +height is off-screen so invisible.
+    screensaver-exit-timer := Timer {
+        interval: 360ms;
+        running: root.screensaver-exiting;
+        triggered => {
+            root.screensaver-active = false;
+            root.screensaver-exiting = false;
+        }
+    }
+    // After 10 s on the screensaver with no song, suspend the system.
+    screensaver-sleep-timer := Timer {
+        interval: 10s;
+        running: root.screensaver-active && root.player-track-title == "";
+        triggered => { root.invoke-sleep(); }
     }
 
     // ── Boot splash ───────────────────────────────────────────────────────
@@ -178,7 +209,7 @@ export component MainWindow inherits Window {
     in property <float> player-progress-percent: 0.0;
     // in-out so the FocusScope key handler can update it locally when the
     // user presses the Surface Go 2's hardware volume buttons.
-    in-out property <float> player-volume: 0.8;
+    in-out property <float> player-volume: 0.25;
     in property <string> player-track-id: "";
     in property <bool> player-is-liked: false;
     in property <bool> player-is-saved: false;
@@ -886,7 +917,7 @@ export component MainWindow inherits Window {
             current-time-str: root.player-current-time-str;
             total-time-str: root.player-total-time-str;
             progress-percent: root.player-progress-percent;
-            volume: root.player-volume;
+            volume <=> root.player-volume;
             is-liked: root.player-is-liked;
             is-saved: root.player-is-saved;
 
@@ -938,7 +969,7 @@ export component MainWindow inherits Window {
         current-time-str: root.player-current-time-str;
         total-time-str: root.player-total-time-str;
         progress-percent: root.player-progress-percent;
-        volume: root.player-volume;
+        volume <=> root.player-volume;
         is-liked: root.player-is-liked;
         spectrum-bands: root.player-spectrum-bands;
         bg-image: root.player-bg-image;
@@ -971,6 +1002,156 @@ export component MainWindow inherits Window {
         animate y {
             duration: 350ms;
             easing: ease-out;
+        }
+    }
+
+    // ── Screensaver overlay ───────────────────────────────────────────────
+    // Two modes: song playing shows album art + info; no song shows the
+    // R·Audio logo over the animated orb background. Swipe up to dismiss.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        x: 0;
+        y: root.screensaver-exiting ? -parent.height
+           : (root.screensaver-active ? -root.screensaver-drag-offset : -parent.height);
+        background: @linear-gradient(180deg, #160d26fa 0%, #08040dfd 100%);
+        animate y { duration: root.screensaver-dragging ? 0ms : 350ms; easing: ease-out; }
+
+        // Album-art derived gradient (no-op when empty)
+        Image {
+            source: root.player-bg-image;
+            width: 100%;
+            height: 100%;
+            image-fit: fill;
+        }
+
+        // Ambient spectrum — only when a track is loaded
+        if root.player-track-title != "": HorizontalLayout {
+            alignment: space-around;
+            padding-left: 24px;
+            padding-right: 24px;
+            width: 100%;
+            height: 72%;
+            y: (parent.height - self.height) / 2;
+            opacity: 0.42;
+            for band in root.player-spectrum-bands: Rectangle {
+                width: 14px;
+                Rectangle {
+                    width: 14px;
+                    height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
+                    y: parent.height / 2 - self.height;
+                    background: @linear-gradient(180deg, #7f00ffbb 0%, #ff2a5f 100%);
+                    border-radius: 3px;
+                    animate height { duration: 40ms; easing: ease-out; }
+                }
+                Rectangle {
+                    width: 14px;
+                    height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
+                    y: parent.height / 2;
+                    background: @linear-gradient(180deg, #ff2a5f 0%, #7f00ffbb 100%);
+                    border-radius: 3px;
+                    animate height { duration: 40ms; easing: ease-out; }
+                }
+            }
+        }
+
+        // Swipe-up to dismiss — fills the whole overlay, no other interactive elements
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            moved => {
+                if self.pressed {
+                    root.screensaver-dragging = true;
+                    root.screensaver-drag-offset = Math.max(0px, self.pressed-y - self.mouse-y);
+                }
+            }
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.up {
+                    root.screensaver-dragging = false;
+                    if root.screensaver-drag-offset > 60px {
+                        root.screensaver-drag-offset = 0px;
+                        root.screensaver-exiting = true;
+                    } else {
+                        root.screensaver-drag-offset = 0px;
+                    }
+                }
+            }
+        }
+
+        // ── Song playing: album art + track info ──────────────────────────
+        if root.player-track-title != "": VerticalLayout {
+            width: 100%;
+            height: 100%;
+            alignment: center;
+            spacing: 24px;
+
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 280px;
+                    height: 280px;
+                    border-radius: 16px;
+                    background: #1e1e24;
+                    clip: true;
+                    border-width: 1px;
+                    border-color: #ffffff1c;
+                    drop-shadow-color: #0000009c;
+                    drop-shadow-blur: 28px;
+                    drop-shadow-offset-y: 14px;
+                    Image {
+                        source: root.player-album-cover;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: contain;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 6px;
+                Text {
+                    text: root.player-track-title;
+                    color: white;
+                    font-size: 24px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.player-track-artist;
+                    color: #b3b3b3;
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // ── No song: splash logo centered ─────────────────────────────────
+        if root.player-track-title == "": Rectangle {
+            width: 100%;
+            height: 100%;
+
+            Image {
+                source: @image-url("assets/raudio-logo.svg");
+                width: 175px;
+                height: 175px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        // Swipe-up caret hint at the bottom
+        Path {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - 36px;
+            width: 24px;
+            height: 14px;
+            commands: "M 2 12 L 12 2 L 22 12";
+            stroke: #ffffff44;
+            stroke-width: 2.5px;
+            fill: transparent;
         }
     }
 

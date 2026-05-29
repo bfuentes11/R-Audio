@@ -712,6 +712,34 @@ async fn process_tracks(
 // kiosk user is in the `input` group (set in kiosk-os/postinstall.sh), so no
 // root is required.
 
+/// Query the system (PulseAudio) volume using pactl.
+fn get_system_volume() -> Option<f32> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = std::process::Command::new("pactl")
+            .args(["get-sink-volume", "@DEFAULT_SINK@"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(pct_idx) = stdout.find('%') {
+                    let mut start = pct_idx;
+                    let bytes = stdout.as_bytes();
+                    while start > 0 && bytes[start - 1].is_ascii_digit() {
+                        start -= 1;
+                    }
+                    if start < pct_idx {
+                        if let Ok(val) = stdout[start..pct_idx].parse::<u32>() {
+                            return Some(val as f32 / 100.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Copy, Clone)]
 enum VolumeKey { Up, Down, Mute }
 
@@ -870,6 +898,113 @@ fn spawn_volume_key_listener(_ui_handle: slint::Weak<MainWindow>) {
     println!("[volkeys] Hardware volume keys only supported on Linux; skipping.");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Power button (KEY_POWER)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Short press (<3 s):
+//   • Song playing  → activate screensaver
+//   • No song       → suspend immediately
+// Long press (≥3 s) → power off
+//
+// systemd handles suspend/poweroff so no root is required as long as the
+// kiosk user is a member of the `sudo` group or polkit allows the action.
+// We use `systemctl suspend` / `systemctl poweroff` to keep it consistent
+// with how the rest of the system manages power.
+
+#[cfg(target_os = "linux")]
+fn spawn_power_button_listener(ui_handle: slint::Weak<MainWindow>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let devices: Vec<(std::path::PathBuf, evdev::Device)> = evdev::enumerate()
+            .filter(|(_, dev)| {
+                dev.supported_keys()
+                    .map(|keys| keys.contains(evdev::Key::KEY_POWER))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if devices.is_empty() {
+            eprintln!("[power] No device advertises KEY_POWER; power button disabled.");
+            return;
+        }
+
+        for (path, mut device) in devices {
+            let ui = ui_handle.clone();
+            std::thread::spawn(move || {
+                let name = device.name().unwrap_or("").to_string();
+                println!("[power] Listening on {:?} ({})", path, name);
+
+                let pressed = Arc::new(AtomicBool::new(false));
+
+                loop {
+                    match device.fetch_events() {
+                        Ok(events) => {
+                            for event in events {
+                                if event.event_type() != evdev::EventType::KEY {
+                                    continue;
+                                }
+                                if evdev::Key::new(event.code()) != evdev::Key::KEY_POWER {
+                                    continue;
+                                }
+                                match event.value() {
+                                    1 => {
+                                        // Press: start long-press watchdog
+                                        pressed.store(true, Ordering::SeqCst);
+                                        let pressed2 = Arc::clone(&pressed);
+                                        let ui2 = ui.clone();
+                                        std::thread::spawn(move || {
+                                            std::thread::sleep(std::time::Duration::from_secs(3));
+                                            if pressed2.load(Ordering::SeqCst) {
+                                                println!("[power] Long press → power off");
+                                                let _ = slint::invoke_from_event_loop(move || {
+                                                    if let Some(u) = ui2.upgrade() {
+                                                        u.invoke_invoke_poweroff();
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                    0 => {
+                                        // Release: if watchdog hasn't fired yet, short press
+                                        let was_pressed = pressed.swap(false, Ordering::SeqCst);
+                                        if was_pressed {
+                                            let ui2 = ui.clone();
+                                            let _ = slint::invoke_from_event_loop(move || {
+                                                if let Some(u) = ui2.upgrade() {
+                                                    if u.get_player_track_title().is_empty() {
+                                                        u.invoke_invoke_sleep();
+                                                    } else {
+                                                        u.set_screensaver_active(true);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[power] {:?} read error: {} — giving up.", path, e);
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spawn_power_button_listener(_ui_handle: slint::Weak<MainWindow>) {
+    println!("[power] Power button only supported on Linux; skipping.");
+}
+
 /// Returns how long until `expires_at` minus `margin_secs`, or `None` if
 /// the deadline is already in the past or the expiry is unknown.
 fn duration_until_token_expiry(
@@ -924,6 +1059,15 @@ fn initialize_audio_player(
                         Arc::clone(&arc.sample_buffer),
                         Arc::clone(&arc.is_playing_atom),
                     );
+                    
+                    // Sync the new player's volume with the UI volume
+                    let current_vol = if let Some(ui) = ui_handle.upgrade() {
+                        ui.get_player_volume()
+                    } else {
+                        0.8
+                    };
+                    arc.set_volume(current_vol).await;
+
                     *player_container.lock().await = Some(Arc::clone(&arc));
                     (arc, events)
                 }
@@ -1745,11 +1889,29 @@ async fn main() -> Result<(), slint::PlatformError> {
     #[cfg(target_os = "linux")]
     ui.window().set_maximized(true);
 
+    // Set initial volume to 25% (0.25)
+    let initial_vol = 0.25;
+    ui.set_player_volume(initial_vol);
+
     // ── Hardware volume key listener ──────────────────────────────────────
-    // Spawn the evdev reader (Linux-only; no-op stub otherwise). See the
-    // module-level comment above spawn_volume_key_listener for why this is
-    // handled in Rust instead of in the Slint FocusScope key handler.
     spawn_volume_key_listener(ui.as_weak());
+
+    // ── Power button listener ─────────────────────────────────────────────
+    spawn_power_button_listener(ui.as_weak());
+
+    // ── Sleep / power-off callbacks ───────────────────────────────────────
+    ui.on_invoke_sleep(|| {
+        println!("[power] Suspending system…");
+        let _ = std::process::Command::new("systemctl")
+            .arg("suspend")
+            .status();
+    });
+    ui.on_invoke_poweroff(|| {
+        println!("[power] Powering off system…");
+        let _ = std::process::Command::new("systemctl")
+            .arg("poweroff")
+            .status();
+    });
 
     // ── Persistent status bar poller (Wi-Fi + battery) ────────────────────
     // Single background task that reads nmcli/DNS + /sys/class/power_supply
@@ -3195,6 +3357,9 @@ async fn main() -> Result<(), slint::PlatformError> {
             }
         });
     });
+
+    // Set initial system volume to 25% to match UI volume
+    ui.invoke_player_change_volume(0.25);
 
     // --- ADD TO LIKED SONGS ---
     let spotify_liked = Arc::clone(&spotify);
