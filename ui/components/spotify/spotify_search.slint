@@ -1,4 +1,5 @@
 import { ScrollView, HorizontalBox, VerticalBox, LineEdit } from "std-widgets.slint";
+import { VirtualKeyboard } from "../keyboard/virtual_keyboard.slint";
 
 export struct UITrack {
     title: string,
@@ -20,9 +21,9 @@ export component SpotifySearch inherits Rectangle {
     callback load-more();
     callback open-artist(string);
 
-    // Show/hide the system on-screen keyboard (onboard). Forwarded to
-    // MainWindow → Rust → org.onboard.Onboard.Keyboard.Show/Hide via D-Bus.
-    callback request-keyboard(bool);
+    // In-process Slint keyboard slide state.
+    property <bool> keyboard-visible: false;
+    property <length> keyboard-height: 310px;
 
     private property <length> text-input-margin: 1rem;
 
@@ -50,7 +51,7 @@ export component SpotifySearch inherits Rectangle {
                 }
                 touch-back := TouchArea {
                     clicked => {
-                        root.request-keyboard(false);
+                        root.keyboard-visible = false;
                         root.go-back();
                     }
                     mouse-cursor: pointer;
@@ -78,20 +79,17 @@ export component SpotifySearch inherits Rectangle {
                 border-radius: 24px;
                 background: #ffffff1a;
                 border-width: 1px;
-                border-color: search_input.has-focus ? #1DB954 : #ffffff33;
+                border-color: root.keyboard-visible ? #1DB954 : #ffffff33;
                 clip: true;
 
                 // Tap zone below the visuals: declared FIRST in source so it
-                // renders BELOW Text + TextInput. Direct taps on the
-                // TextInput still go to it (TextInput captures mouse events
-                // and is rendered on top); taps on the placeholder-text
+                // renders BELOW Text + TextInput. Taps on the placeholder-text
                 // region fall through to this TouchArea, which focuses
-                // search_input and explicitly requests onboard — mirroring
-                // the settings TextInputs' belt-and-suspenders pattern.
+                // search_input and slides the on-screen keyboard up.
                 TouchArea {
                     clicked => {
                         search_input.focus();
-                        root.request-keyboard(true);
+                        root.keyboard-visible = true;
                     }
                 }
 
@@ -111,12 +109,14 @@ export component SpotifySearch inherits Rectangle {
                     single-line: true;
                     text <=> root.search-query;
                     accepted => {
-                        root.request-keyboard(false);
+                        root.keyboard-visible = false;
                         root.search-music(root.search-query);
                     }
-                    // Drive onboard show/hide off native focus changes.
+                    // Slide the keyboard up when the input gains focus.
                     changed has-focus => {
-                        root.request-keyboard(self.has-focus);
+                        if (self.has-focus) {
+                            root.keyboard-visible = true;
+                        }
                     }
                     cursor-position-changed(cursorPos) => {
                         // Handle text scrolling so cursor stays visible
@@ -189,7 +189,7 @@ export component SpotifySearch inherits Rectangle {
                                             enabled: track.artist-id != "";
                                             mouse-cursor: track.artist-id != "" ? pointer : default;
                                             clicked => {
-                                                root.request-keyboard(false);
+                                                root.keyboard-visible = false;
                                                 root.open-artist(track.artist-id);
                                             }
                                         }
@@ -205,7 +205,7 @@ export component SpotifySearch inherits Rectangle {
 
                         touch := TouchArea {
                             clicked => {
-                                root.request-keyboard(false);
+                                root.keyboard-visible = false;
                                 root.play-track(track.id);
                             }
                             mouse-cursor: pointer;
@@ -228,6 +228,21 @@ export component SpotifySearch inherits Rectangle {
         }
     }
 
-    // (Sliding VirtualKeyboard removed — onboard now handles all on-screen
-    // typing; it pops up via D-Bus when search_input.has-focus changes.)
+    // --- Sliding Keyboard Overlay ---
+    // Keystrokes are injected into search_input by the Rust side, so Enter (⏎)
+    // fires its `accepted` (→ search-music) and editing keys just work. We only
+    // manage show/hide here.
+    keyboard := VirtualKeyboard {
+        x: 0;
+        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
+        width: root.width;
+        height: root.keyboard-height;
+
+        close => { root.keyboard-visible = false; }
+
+        animate y {
+            duration: 300ms;
+            easing: ease-out;
+        }
+    }
 }

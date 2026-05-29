@@ -1,4 +1,5 @@
 import { ScrollView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { VirtualKeyboard } from "keyboard/virtual_keyboard.slint";
 
 export struct UIWifiNetwork {
     ssid: string,
@@ -36,10 +37,6 @@ export component Settings inherits Rectangle {
     callback connect-bluetooth(string);
     callback backspace-pressed(string) -> string;
 
-    // Show/hide the system on-screen keyboard (onboard). Forwarded to
-    // MainWindow → Rust → org.onboard.Onboard.Keyboard.Show/Hide via D-Bus.
-    callback request-keyboard(bool);
-
     // Debug tab — Rust reads /tmp/r-audio.log and writes the tail back into
     // debug-log-content. Clear truncates the file.
     callback refresh-debug-log();
@@ -47,14 +44,20 @@ export component Settings inherits Rectangle {
 
     property <string> active-tab: "wifi";
 
+    // In-process Slint keyboard slide state. The keyboard injects key events
+    // into whichever TextInput has focus, so there's no per-field text
+    // routing — we only toggle its visibility here.
+    property <bool> keyboard-visible: false;
+    property <length> keyboard-height: 320px;
+
     init => {
         root.device-name = root.current-device-name;
     }
 
-    // Dismiss onboard when switching to the Bluetooth tab (no text inputs there).
+    // Dismiss the keyboard when switching to the Bluetooth tab (no inputs).
     changed active-tab => {
         if (root.active-tab == "bluetooth") {
-            root.request-keyboard(false);
+            root.keyboard-visible = false;
         }
     }
 
@@ -82,7 +85,7 @@ export component Settings inherits Rectangle {
                     }
                     touch-back := TouchArea {
                         clicked => {
-                            root.request-keyboard(false);
+                            root.keyboard-visible = false;
                             root.go-back();
                         }
                         mouse-cursor: pointer;
@@ -135,7 +138,7 @@ export component Settings inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => {
                                 root.active-tab = "wifi";
-                                root.request-keyboard(false);
+                                root.keyboard-visible = false;
                             }
                         }
                     }
@@ -153,7 +156,7 @@ export component Settings inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => {
                                 root.active-tab = "device";
-                                root.request-keyboard(false);
+                                root.keyboard-visible = false;
                             }
                         }
                     }
@@ -183,7 +186,7 @@ export component Settings inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => {
                                 root.active-tab = "debug";
-                                root.request-keyboard(false);
+                                root.keyboard-visible = false;
                                 root.refresh-debug-log();
                             }
                         }
@@ -240,8 +243,7 @@ export component Settings inherits Rectangle {
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.selected-ssid = net.ssid;
-                                    // Keyboard pops up automatically when the
-                                    // password input gains focus (see below).
+                                    root.keyboard-visible = false;
                                 }
                             }
                         }
@@ -274,23 +276,20 @@ export component Settings inherits Rectangle {
                                 text <=> root.wifi-password;
                                 single-line: true;
                                 accepted => {
-                                    root.request-keyboard(false);
+                                    root.keyboard-visible = false;
                                     root.connect-wifi(root.selected-ssid, root.wifi-password);
                                 }
                                 changed has-focus => {
-                                    root.request-keyboard(self.has-focus);
+                                    if (self.has-focus) {
+                                        root.keyboard-visible = true;
+                                    }
                                 }
                             }
                         }
                         TouchArea {
                             clicked => {
                                 wifi-focus.focus();
-                                // Belt-and-suspenders: explicitly request the
-                                // keyboard here in addition to the input's
-                                // `changed has-focus` handler. Either path is
-                                // enough on its own; firing both is harmless
-                                // (Show is idempotent on onboard).
-                                root.request-keyboard(true);
+                                root.keyboard-visible = true;
                             }
                         }
                     }
@@ -301,7 +300,7 @@ export component Settings inherits Rectangle {
                         TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                root.request-keyboard(false);
+                                root.keyboard-visible = false;
                                 root.connect-wifi(root.selected-ssid, root.wifi-password);
                             }
                         }
@@ -349,20 +348,20 @@ export component Settings inherits Rectangle {
                                 text <=> root.device-name;
                                 single-line: true;
                                 accepted => {
-                                    root.request-keyboard(false);
+                                    root.keyboard-visible = false;
                                     root.update-device-name(root.device-name);
                                 }
                                 changed has-focus => {
-                                    root.request-keyboard(self.has-focus);
+                                    if (self.has-focus) {
+                                        root.keyboard-visible = true;
+                                    }
                                 }
                             }
                         }
                         TouchArea {
                             clicked => {
                                 device-focus.focus();
-                                // See wifi-input TouchArea above — explicit
-                                // request mirrors `changed has-focus`.
-                                root.request-keyboard(true);
+                                root.keyboard-visible = true;
                             }
                         }
                     }
@@ -376,7 +375,7 @@ export component Settings inherits Rectangle {
                         TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                root.request-keyboard(false);
+                                root.keyboard-visible = false;
                                 root.update-device-name(root.device-name);
                             }
                         }
@@ -514,6 +513,21 @@ export component Settings inherits Rectangle {
         }
     }
 
-    // (Sliding VirtualKeyboard removed — onboard now handles all on-screen
-    // typing; it pops up via D-Bus when wifi-input/device-input gain focus.)
+    // --- Sliding Keyboard Overlay ---
+    // Keystrokes are injected into the focused TextInput by the Rust side, so
+    // Enter (⏎) fires that input's `accepted` (→ connect-wifi / update-device-
+    // name) and Backspace/arrows just work. We only manage show/hide here.
+    keyboard := VirtualKeyboard {
+        x: 0;
+        y: root.keyboard-visible ? (root.height - root.keyboard-height) : root.height;
+        width: root.width;
+        height: root.keyboard-height;
+
+        close => { root.keyboard-visible = false; }
+
+        animate y {
+            duration: 300ms;
+            easing: ease-out;
+        }
+    }
 }

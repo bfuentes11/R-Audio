@@ -1751,104 +1751,6 @@ async fn main() -> Result<(), slint::PlatformError> {
     // handled in Rust instead of in the Slint FocusScope key handler.
     spawn_volume_key_listener(ui.as_weak());
 
-    // ── On-screen keyboard bridge (onboard via D-Bus) ─────────────────────
-    // onboard is pre-launched by xinitrc (before r-audio starts) and hidden
-    // via its D-Bus retry loop. We just send Show/Hide here on focus change.
-    ui.on_request_keyboard(|show| {
-        println!("[keyboard] request-keyboard({}) fired from Slint", show);
-        #[cfg(target_os = "linux")]
-        {
-            let method = if show { "Show" } else { "Hide" };
-            let method = method.to_string();
-            std::thread::spawn(move || {
-                let result = std::process::Command::new("dbus-send")
-                    .args([
-                        "--print-reply",
-                        "--type=method_call",
-                        "--dest=org.onboard.Onboard",
-                        "/org/onboard/Onboard/Keyboard",
-                        &format!("org.onboard.Onboard.Keyboard.{}", method),
-                    ])
-                    .output();
-                match result {
-                    Ok(out) if out.status.success() => {
-                        println!("[keyboard] dbus-send {} ok", method);
-                        // On Show, force the onboard window above R-Audio's
-                        // maximized window. dbus Show succeeds but onboard
-                        // renders *behind* us otherwise (it shows fine when
-                        // nothing else is on screen). Set _NET_WM_STATE_ABOVE
-                        // via wmctrl WITHOUT activating it, so focus stays on
-                        // the R-Audio TextInput and keystrokes land there.
-                        if method == "Show" {
-                            let raise = std::process::Command::new("wmctrl")
-                                .args(["-x", "-r", "onboard.Onboard", "-b", "add,above"])
-                                .output();
-                            match raise {
-                                Ok(r) if r.status.success() => {
-                                    println!("[keyboard] wmctrl raise onboard ok");
-                                }
-                                Ok(r) => {
-                                    eprintln!(
-                                        "[keyboard] wmctrl raise failed (exit {:?}): {}",
-                                        r.status.code(),
-                                        String::from_utf8_lossy(&r.stderr).trim()
-                                    );
-                                    // Fall back to title-substring match in case
-                                    // the WM_CLASS differs on this onboard build.
-                                    let _ = std::process::Command::new("wmctrl")
-                                        .args(["-r", "Onboard", "-b", "add,above"])
-                                        .output();
-                                }
-                                Err(e) => {
-                                    eprintln!("[keyboard] wmctrl not available: {}", e);
-                                }
-                            }
-                        }
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        eprintln!(
-                            "[keyboard] dbus-send {} failed (exit {:?}):\n  stderr: {}\n  stdout: {}",
-                            method, out.status.code(),
-                            stderr.trim(), stdout.trim()
-                        );
-                        // If D-Bus can't find onboard, dump the window list so
-                        // we can see whether onboard is running but off-screen,
-                        // not running at all, etc. — without needing a keyboard.
-                        if stderr.contains("spawn.execfailed") || stderr.contains("execfailed") {
-                            eprintln!("[keyboard] spawn.execfailed — dumping window list:");
-                            if let Ok(wm) = std::process::Command::new("wmctrl").arg("-l").output() {
-                                eprintln!("[keyboard] wmctrl -l:\n{}", String::from_utf8_lossy(&wm.stdout));
-                            } else {
-                                eprintln!("[keyboard] wmctrl not available");
-                            }
-                            // Also log running processes that contain "onboard"
-                            if let Ok(ps) = std::process::Command::new("pgrep")
-                                .args(["-a", "onboard"])
-                                .output()
-                            {
-                                let procs = String::from_utf8_lossy(&ps.stdout);
-                                if procs.trim().is_empty() {
-                                    eprintln!("[keyboard] pgrep onboard: NOT RUNNING");
-                                } else {
-                                    eprintln!("[keyboard] pgrep onboard:\n{}", procs.trim());
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[keyboard] dbus-send invocation failed: {}", e);
-                    }
-                }
-            });
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            println!("[keyboard] request-keyboard({}) — no-op on non-Linux", show);
-        }
-    });
-
     // ── Persistent status bar poller (Wi-Fi + battery) ────────────────────
     // Single background task that reads nmcli/DNS + /sys/class/power_supply
     // every 5s and pushes both into the UI via the event loop. The status
@@ -1912,10 +1814,27 @@ async fn main() -> Result<(), slint::PlatformError> {
         string.into()
     });
 
-    // (The TextManip global was only used by the Slint VirtualKeyboard for
-    // cursor-aware text edits; with onboard now handling typing through
-    // native X11 keyboard events into Slint's TextInput, no per-site cursor
-    // helpers are needed.)
+    // ── On-screen keyboard: inject key events into the focused TextInput ───
+    // The Slint VirtualKeyboard (ui/components/keyboard/virtual_keyboard.slint)
+    // fires VirtualKeyboardHandler.key-pressed(text) for every tap — regular
+    // characters as their literal string, special keys as Slint Key.* codes
+    // (Backspace, Return, arrows, etc.). We dispatch a synthetic
+    // KeyPressed/KeyReleased pair at the window so it lands in whichever
+    // TextInput currently holds focus, exactly like a real keyboard. This is
+    // the approach from Slint's own virtual_keyboard example.
+    VirtualKeyboardHandler::get(&ui).on_key_pressed({
+        let weak = ui.as_weak();
+        move |key| {
+            if let Some(ui) = weak.upgrade() {
+                ui.window().dispatch_event(
+                    slint::platform::WindowEvent::KeyPressed { text: key.clone() },
+                );
+                ui.window().dispatch_event(
+                    slint::platform::WindowEvent::KeyReleased { text: key },
+                );
+            }
+        }
+    });
 
     // --- SETTINGS CALLBACKS ---
 

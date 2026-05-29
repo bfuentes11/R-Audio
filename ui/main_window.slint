@@ -1,4 +1,5 @@
 import { ScrollView, VerticalBox } from "std-widgets.slint";
+import { VirtualKeyboardHandler } from "components/keyboard/virtual_keyboard.slint";
 import { ProviderCard } from "components/provider_card.slint";
 import {
     SpotifySearch,
@@ -24,7 +25,7 @@ import {
 } from "components/settings.slint";
 import { BootSplash } from "components/boot_splash.slint";
 
-export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice }
+export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice, VirtualKeyboardHandler }
 
 export component MainWindow inherits Window {
     preferred-width: 800px;
@@ -134,13 +135,6 @@ export component MainWindow inherits Window {
     callback search-music(string);
     callback backspace-pressed(string) -> string;
     callback play-track(string);
-
-    // ── On-screen keyboard (onboard) show/hide ─────────────────────────────
-    // Settings and Search forward TextInput focus changes to this callback,
-    // which the Rust side translates into D-Bus Show/Hide calls against
-    // org.onboard.Onboard.Keyboard. The Slint VirtualKeyboard component is
-    // no longer used; onboard handles all on-screen typing.
-    callback request-keyboard(bool);
     callback load-more();
     callback open-album(string);
     callback open-playlist(string, string);
@@ -536,7 +530,6 @@ export component MainWindow inherits Window {
                 refresh-debug-log => { root.settings-refresh-debug-log(); }
                 clear-debug-log => { root.settings-clear-debug-log(); }
                 backspace-pressed(s) => { root.backspace-pressed(s) }
-                request-keyboard(show) => { root.request-keyboard(show); }
             }
         }
 
@@ -609,7 +602,6 @@ export component MainWindow inherits Window {
                 open-artist(id) => {
                     root.open-artist(id)
                 }
-                request-keyboard(show) => { root.request-keyboard(show); }
             }
         }
 

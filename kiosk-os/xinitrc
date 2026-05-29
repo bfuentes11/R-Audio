@@ -33,125 +33,13 @@ xset s noblank
 xset -dpms
 
 # ──────────────────────────────────────────────────────────────────────────────
-# AT-SPI accessibility bus.
-# Onboard is a Python/GTK accessibility tool — it requires the AT-SPI daemon
-# to be running or it crashes immediately on startup. The launcher path moved
-# between Debian releases; search all known locations.
+# On-screen keyboard.
+# R-Audio now renders its own in-process Slint VirtualKeyboard (see
+# ui/components/keyboard/virtual_keyboard.slint), driven entirely inside the app — no
+# external process, no D-Bus, no AT-SPI. The previous onboard integration was
+# removed because onboard could not be made to reliably display above the
+# maximized R-Audio window on this bare X11 + openbox kiosk.
 # ──────────────────────────────────────────────────────────────────────────────
-AT_SPI_LAUNCHER=""
-for _p in \
-    /usr/lib/at-spi2-core/at-spi-bus-launcher \
-    /usr/libexec/at-spi-bus-launcher \
-    /usr/lib/x86_64-linux-gnu/at-spi2-core/at-spi-bus-launcher; do
-    if [ -x "$_p" ]; then
-        AT_SPI_LAUNCHER="$_p"
-        break
-    fi
-done
-if [ -n "$AT_SPI_LAUNCHER" ]; then
-    "$AT_SPI_LAUNCHER" --launch-immediately &
-    echo "[xinitrc] at-spi-bus-launcher started: $AT_SPI_LAUNCHER"
-    sleep 1
-else
-    echo "[xinitrc] at-spi-bus-launcher not found in any known path — onboard may crash"
-    # Log all files from at-spi2-core to help diagnose the correct path
-    echo "[xinitrc] at-spi2-core contents: $(dpkg -L at-spi2-core 2>/dev/null | grep launcher || echo 'dpkg query failed')"
-fi
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Onboard on-screen keyboard.
-# Launched BEFORE the window manager so it has time to register on D-Bus
-# before R-Audio starts. Show/hide is driven by R-Audio over D-Bus
-# (org.onboard.Onboard.Keyboard.Show / .Hide) whenever a TextInput in the UI
-# gains/loses focus — see ui.on_request_keyboard in src/main.rs.
-#
-# Layout/theme: verify they exist before passing them — an unknown layout or
-# theme causes an immediate crash with no output. Fallback to bare onboard.
-# ──────────────────────────────────────────────────────────────────────────────
-echo "[xinitrc] onboard path: $(command -v onboard || echo 'NOT FOUND')"
-if command -v onboard >/dev/null 2>&1; then
-    # Phone layout + Nightshade theme are touch-optimized; fall back to onboard
-    # defaults silently if either isn't present (confirmed working either way).
-    ONBOARD_ARGS=""
-    [ -f /usr/share/onboard/layouts/Phone.onboard ] && ONBOARD_ARGS="$ONBOARD_ARGS --layout=Phone"
-    [ -f /usr/share/onboard/themes/Nightshade.theme ] && ONBOARD_ARGS="$ONBOARD_ARGS --theme=Nightshade"
-
-    # Sanity check — the onboard Python package is 'Onboard' (capital O); the
-    # lowercase 'onboard' is just the executable script.
-    echo "[xinitrc] python3 import check: $(python3 -c 'import Onboard' 2>&1 && echo OK)"
-
-    # ── Onboard behaviour settings (gsettings → dconf) ────────────────────────
-    # These make onboard obey OUR manual D-Bus Show/Hide and render where we
-    # can see it. Applied before launch so onboard reads them at startup.
-    #
-    #  • auto-show.enabled=false — CRITICAL. With auto-show on, onboard uses
-    #    AT-SPI to detect focused editable widgets and shows/hides itself.
-    #    R-Audio is a Slint app, so its TextInputs are invisible to AT-SPI;
-    #    onboard sees "nothing editable focused" and re-hides immediately after
-    #    our D-Bus Show. Disabling it makes Show/Hide authoritative.
-    #  • force-to-top=true — keep onboard above the maximized R-Audio window.
-    #  • docking-enabled=true — dock to the bottom edge at a known position so
-    #    it can't end up off-screen from a stale saved geometry.
-    # Make sure gsettings can find the system schema dir. A bare startx session
-    # often leaves XDG_DATA_DIRS unset/incomplete, so gsettings can't locate
-    # /usr/share/glib-2.0/schemas even when the compiled cache is present.
-    export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-    case ":$XDG_DATA_DIRS:" in *":/usr/share:"*) ;; *) XDG_DATA_DIRS="$XDG_DATA_DIRS:/usr/share";; esac
-
-    # Diagnostics — tell us definitively where the schema problem is.
-    echo "[xinitrc] XDG_DATA_DIRS=$XDG_DATA_DIRS"
-    echo "[xinitrc] onboard schema files: $(ls /usr/share/glib-2.0/schemas/*onboard* 2>/dev/null | tr '\n' ' ' || echo 'NONE')"
-    echo "[xinitrc] gschemas.compiled: $([ -f /usr/share/glib-2.0/schemas/gschemas.compiled ] && echo present || echo MISSING)"
-    echo "[xinitrc] gsettings sees onboard schemas: $(gsettings list-schemas 2>/dev/null | grep -c onboard) found"
-
-    set_ob() {
-        gsettings set "$1" "$2" "$3" 2>/dev/null \
-            && echo "[xinitrc] onboard set $1 $2=$3" \
-            || echo "[xinitrc] WARNING: failed to set $1 $2 (schema missing?)"
-    }
-    set_ob org.onboard.auto-show enabled false
-    set_ob org.onboard.window force-to-top true
-    set_ob org.onboard.window docking-enabled true
-
-    # Resolve absolute path once — bare 'onboard' can fail PATH lookup inside
-    # subshells depending on how the login chain sets up the environment.
-    ONBOARD_BIN="$(command -v onboard)"
-    echo "[xinitrc] launching: $ONBOARD_BIN $ONBOARD_ARGS"
-    # Wrap in a subshell so we capture exit code and signal number.
-    # Exit codes > 128 mean killed by signal (139=SIGSEGV, 134=SIGABRT, 132=SIGILL).
-    # shellcheck disable=SC2086
-    (
-        "$ONBOARD_BIN" $ONBOARD_ARGS > /tmp/onboard.log 2>&1
-        CODE=$?
-        echo "[xinitrc] onboard exited: code=$CODE" >> /tmp/r-audio.log
-        if [ "$CODE" -gt 128 ]; then
-            echo "[xinitrc] onboard killed by signal $((CODE - 128)) (11=SIGSEGV 6=SIGABRT 4=SIGILL)" >> /tmp/r-audio.log
-        fi
-        cat /tmp/onboard.log >> /tmp/r-audio.log
-    ) &
-    ONBOARD_PID=$!
-    echo "[xinitrc] onboard launched (pid $ONBOARD_PID)"
-    (
-        for i in 1 2 3 4 5 6 7 8 9 10; do
-            sleep 2
-            # Check if the process is still alive
-            if ! kill -0 "$ONBOARD_PID" 2>/dev/null; then
-                echo "[xinitrc] onboard process died (pid $ONBOARD_PID) — on-screen keyboard disabled"
-                break
-            fi
-            if dbus-send --type=method_call \
-                --dest=org.onboard.Onboard \
-                /org/onboard/Onboard/Keyboard \
-                org.onboard.Onboard.Keyboard.Hide >/dev/null 2>&1; then
-                echo "[xinitrc] onboard ready and hidden (attempt $i)"
-                break
-            fi
-            echo "[xinitrc] onboard not on D-Bus yet (attempt $i/10)..."
-        done
-    ) &
-else
-    echo "[xinitrc] onboard binary not found — on-screen keyboard disabled."
-fi
 
 # Start a window manager so X11 honors EWMH fullscreen hints from Slint.
 # openbox is installed via the bundled .debs during d-i postinstall, so it's

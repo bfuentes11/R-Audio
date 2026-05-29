@@ -1,0 +1,238 @@
+// Adapted from the official Slint virtual_keyboard example
+// (examples/virtual_keyboard, MIT © SixtyFPS GmbH). Restyled to R-Audio's dark
+// theme and rendered with text glyphs instead of icon images so it carries no
+// external asset dependency.
+//
+// Keys are injected into whichever Slint TextInput currently has focus, via
+// WindowEvent::KeyPressed / KeyReleased dispatched on the Rust side
+// (VirtualKeyboardHandler.key-pressed → ui.window().dispatch_event in
+// src/main.rs). That means the native cursor, text selection, `accepted`
+// (Enter), Backspace and arrow keys all behave exactly as if a real keyboard
+// were attached — no per-field text wiring needed.
+
+component VirtualKeyboardButton inherits Rectangle {
+    in property <string> key;
+    callback key-pressed(/* key */ string);
+
+    min-width: 34px;
+    min-height: 46px;
+    horizontal-stretch: 0;
+    border-radius: 8px;
+
+    background: i-touch.pressed ? #00000066 : (i-touch.has-hover ? #ffffff1a : #00000033);
+    border-width: 1px;
+    border-color: i-touch.has-hover ? #ffffff33 : #ffffff11;
+
+    animate background { duration: 120ms; }
+
+    Text {
+        text: root.key;
+        color: white;
+        font-size: 16px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    i-touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.key-pressed(root.key);
+            }
+        }
+    }
+}
+
+export struct KeyModel {
+    key: string,
+    shift-key: string,
+}
+
+export global VirtualKeyboardHandler {
+    in property <[[[KeyModel]]]> default-key-sets: [
+       [
+            [
+                { key: "q", shift-key: "Q" },
+                { key: "w", shift-key: "W" },
+                { key: "e", shift-key: "E" },
+                { key: "r", shift-key: "R" },
+                { key: "t", shift-key: "T" },
+                { key: "y", shift-key: "Y" },
+                { key: "u", shift-key: "U" },
+                { key: "i", shift-key: "I" },
+                { key: "o", shift-key: "O" },
+                { key: "p", shift-key: "P" }
+            ],
+            [
+                { key: "a", shift-key: "A" },
+                { key: "s", shift-key: "S" },
+                { key: "d", shift-key: "D" },
+                { key: "f", shift-key: "F" },
+                { key: "g", shift-key: "G" },
+                { key: "h", shift-key: "H" },
+                { key: "j", shift-key: "J" },
+                { key: "k", shift-key: "K" },
+                { key: "l", shift-key: "L" }
+            ],
+            [
+                { key: "z", shift-key: "Z" },
+                { key: "x", shift-key: "X" },
+                { key: "c", shift-key: "C" },
+                { key: "v", shift-key: "V" },
+                { key: "b", shift-key: "B" },
+                { key: "n", shift-key: "N" },
+                { key: "m", shift-key: "M" },
+                { key: ",", shift-key: ";" },
+                { key: ".", shift-key: ":" },
+                { key: "-", shift-key: "_" }
+            ],
+       ],
+       [
+            [
+                { key: "1", shift-key: "[" },
+                { key: "2", shift-key: "]" },
+                { key: "3", shift-key: "{" },
+                { key: "4", shift-key: "}" },
+                { key: "5", shift-key: "#" },
+                { key: "6", shift-key: "%" },
+                { key: "7", shift-key: "^" },
+                { key: "8", shift-key: "*" },
+                { key: "9", shift-key: "+" },
+                { key: "0", shift-key: "=" }
+            ],
+            [
+                { key: "-", shift-key: "_" },
+                { key: "/", shift-key: "\\" },
+                { key: ":", shift-key: "|" },
+                { key: ";", shift-key: "~" },
+                { key: "(", shift-key: "<" },
+                { key: ")", shift-key: ">" },
+                { key: "$", shift-key: "&" },
+                { key: "@", shift-key: "`" },
+                { key: "\"", shift-key: "'" },
+                { key: "*", shift-key: "%" }
+            ],
+            [
+                { key: ".", shift-key: "." },
+                { key: ",", shift-key: "," },
+                { key: "?", shift-key: "?" },
+                { key: "!", shift-key: "!" },
+                { key: "'", shift-key: "'" },
+                { key: "_", shift-key: "_" },
+                { key: "=", shift-key: "=" },
+                { key: "+", shift-key: "+" }
+            ],
+       ]
+    ];
+
+    out property <int> current-key-set;
+    out property <[[KeyModel]]> keys: default-key-sets[self.current-key-set];
+    in-out property <bool> open;
+
+    callback key_pressed(/* key */ string);
+
+    public function switch-keyboard() {
+        if (self.current-key-set < self.default-key-sets.length - 1) {
+            self.current-key-set += 1;
+        } else {
+            self.current-key-set -= 1;
+        }
+        self.current-key-set = min(self.default-key-sets.length - 1, max(0, self.current-key-set));
+    }
+}
+
+export component VirtualKeyboard inherits Rectangle {
+    private property <bool> shift;
+
+    callback close();
+
+    background: #1a1a2e;
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    border-width: 1px;
+    border-color: #ffffff18;
+    drop-shadow-color: #00000088;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: -4px;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+        alignment: center;
+
+        for row[index] in VirtualKeyboardHandler.keys : HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+
+            if (index == 0) : VirtualKeyboardButton {
+                key: "esc";
+                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Escape); }
+            }
+            if (index == 1) : VirtualKeyboardButton {
+                key: "tab";
+                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Tab); }
+            }
+            // shift (left)
+            if (index == 2) : VirtualKeyboardButton {
+                key: "⇧";
+                key-pressed => { root.shift = !root.shift; }
+            }
+
+            for km in row : VirtualKeyboardButton {
+                key: root.shift ? km.shift-key : km.key;
+                key-pressed(key) => {
+                    VirtualKeyboardHandler.key-pressed(key);
+                    root.shift = false;
+                }
+            }
+
+            if (index == 0) : VirtualKeyboardButton {
+                key: "⌫";
+                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Backspace); }
+            }
+            if (index == 1) : VirtualKeyboardButton {
+                key: "⏎";
+                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.Return); }
+            }
+            // shift (right)
+            if (index == 2) : VirtualKeyboardButton {
+                key: "⇧";
+                key-pressed => { root.shift = !root.shift; }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+
+            VirtualKeyboardButton {
+                key: "▾";
+                key-pressed => { root.close(); }
+            }
+            VirtualKeyboardButton {
+                key: VirtualKeyboardHandler.current-key-set == 0 ? "?123" : "ABC";
+                key-pressed => {
+                    VirtualKeyboardHandler.switch-keyboard();
+                    root.shift = false;
+                }
+            }
+            VirtualKeyboardButton {
+                horizontal-stretch: 1;
+                key: " ";
+                key-pressed(key) => {
+                    root.shift = false;
+                    VirtualKeyboardHandler.key-pressed(key);
+                }
+            }
+            VirtualKeyboardButton {
+                key: "←";
+                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.LeftArrow); }
+            }
+            VirtualKeyboardButton {
+                key: "→";
+                key-pressed => { VirtualKeyboardHandler.key-pressed(Key.RightArrow); }
+            }
+        }
+    }
+}
