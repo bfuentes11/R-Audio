@@ -76,21 +76,21 @@ export component FullPlayer inherits Rectangle {
             for band in root.spectrum-bands: Rectangle {
                 width: 14px;
 
-                // Top bar: anchored at the center line, grows upward
+                // Top bar: extends 3px past center to cover the rounded end gap
                 Rectangle {
                     width: 14px;
                     height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
-                    y: parent.height / 2 - self.height;
+                    y: parent.height / 2 - self.height + 3px;
                     background: @linear-gradient(180deg, #7f00ffbb 0%, #ff2a5f 100%);
                     border-radius: 3px;
                     animate height { duration: 40ms; easing: ease-out; }
                 }
 
-                // Bottom bar: anchored at the center line, grows downward (mirror)
+                // Bottom bar: starts 3px before center to cover the rounded end gap
                 Rectangle {
                     width: 14px;
                     height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
-                    y: parent.height / 2;
+                    y: parent.height / 2 - 3px;
                     background: @linear-gradient(180deg, #ff2a5f 0%, #7f00ffbb 100%);
                     border-radius: 3px;
                     animate height { duration: 40ms; easing: ease-out; }

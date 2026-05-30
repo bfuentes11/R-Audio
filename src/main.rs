@@ -1858,8 +1858,14 @@ fn spawn_fft_loop(
                 continue;
             }
 
-            let bands_vec: Vec<f32> = new_bands.to_vec();
-            last_sent.clone_from(&bands_vec);
+            let raw_vec: Vec<f32> = new_bands.to_vec();
+            // Mirror horizontally: reverse the first half, then append it
+            // forward, so the display is symmetric around the center.
+            let half = raw_vec.len() / 2;
+            let bands_vec: Vec<f32> = raw_vec[..half].iter().rev().cloned()
+                .chain(raw_vec[..half].iter().cloned())
+                .collect();
+            last_sent.clone_from(&raw_vec);
             let _ = slint::invoke_from_event_loop(move || {
                 SPECTRUM_BANDS_MODEL.with(|m| {
                     if let Some(ref model) = *m.borrow() {
