@@ -1,7 +1,6 @@
-import { ScrollView, VerticalBox, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 import { VirtualKeyboardHandler, VirtualKeyboard } from "components/keyboard/virtual_keyboard.slint";
 import { TextInputDialog } from "components/input_dialog.slint";
-import { ProviderCard } from "components/provider_card.slint";
 import {
     SpotifySearch,
     UITrack,
@@ -15,7 +14,7 @@ import {
     SpotifyAccounts,
     UIAccount,
 } from "components/spotify/spotify_accounts.slint";
-import { FullPlayer } from "components/full_player.slint";
+import { FullPlayerV2 } from "components/full_player_v2.slint";
 import { SetupWindow } from "setup_window.slint";
 import { WifiSetup } from "components/wifi/wifi_setup.slint";
 import { OobeWelcome } from "components/oobe/oobe_welcome.slint";
@@ -25,6 +24,7 @@ import {
     UIBluetoothDevice,
 } from "components/settings.slint";
 import { BootSplash } from "components/boot_splash.slint";
+import { PowerOverlay } from "components/power_overlay.slint";
 
 export { UITrack, UIAccount, SetupWindow, UIWifiNetwork, UIBluetoothDevice, VirtualKeyboardHandler }
 
@@ -51,10 +51,18 @@ export component MainWindow inherits Window {
     property <bool> screensaver-exiting: false;
     callback invoke-sleep();
     callback invoke-poweroff();
+    callback invoke-restart();
+    // Driven by the Rust power-button listener: flipped true after a short
+    // hold of the hardware power button to reveal the Cancel/Restart/Shutdown
+    // overlay. A quick press suspends instead; a 10 s hold forces shutdown.
+    in-out property <bool> power-overlay-active: false;
     property <bool> screensaver-dragging: false;
     property <length> screensaver-drag-offset: 0px;
     property <length> screensaver-touch-start-y: 0px;
     property <bool> dim-active: false;
+    // Set true on any user interaction; a 1 ms timer immediately resets it,
+    // which restarts the screensaver/dim 60 s countdown from zero.
+    property <bool> screensaver-user-active: false;
 
     // ── Status pill auto-hide ─────────────────────────────────────────────
     // The Wi-Fi/battery pill shows for 5 s on startup or whenever the user
@@ -79,12 +87,13 @@ export component MainWindow inherits Window {
     }
 
     // ── Screensaver timer ─────────────────────────────────────────────────
-    // Fires after 60 s of inactivity. Toggling screensaver-active false
-    // (on dismiss) sets running back to true, restarting the countdown.
+    // Fires after 60 s of inactivity. Any user interaction sets
+    // screensaver-user-active = true, which pauses the timer for 1 ms
+    // (via screensaver-activity-reset below) so it restarts from zero.
     // Screensaver only activates when a song is playing.
     screensaver-timer := Timer {
         interval: 60s;
-        running: !root.screensaver-active && root.player-track-title != "";
+        running: !root.screensaver-active && !root.screensaver-user-active && root.player-track-title != "";
         triggered => { root.screensaver-active = true; }
     }
     // Fires after the slide-up animation completes, then clears both flags.
@@ -96,10 +105,16 @@ export component MainWindow inherits Window {
             root.screensaver-exiting = false;
         }
     }
+    // Immediately clears screensaver-user-active so the 60 s countdown restarts.
+    screensaver-activity-reset := Timer {
+        interval: 1ms;
+        running: root.screensaver-user-active;
+        triggered => { root.screensaver-user-active = false; }
+    }
     // No song: dim after 60 s idle, then sleep after 10 s of dimming.
     dim-timer := Timer {
         interval: 60s;
-        running: !root.dim-active && root.player-track-title == "";
+        running: !root.dim-active && !root.screensaver-user-active && root.player-track-title == "";
         triggered => { root.dim-active = true; }
     }
     dim-sleep-timer := Timer {
@@ -107,6 +122,11 @@ export component MainWindow inherits Window {
         running: root.dim-active;
         triggered => { root.invoke-sleep(); }
     }
+    // Reset idle countdown whenever observable playback or navigation state
+    // changes — track change, play/pause toggle, or view switch.
+    changed player-track-id => { screensaver-user-active = true; }
+    changed player-is-playing => { screensaver-user-active = true; }
+    changed active-view => { screensaver-user-active = true; }
 
     // ── Boot splash ───────────────────────────────────────────────────────
     // Rust sets boot-done = true once startup checks finish. The internal
@@ -222,6 +242,9 @@ export component MainWindow inherits Window {
     in property <bool> player-is-saved: false;
     in property <[float]> player-spectrum-bands: [];
     in property <image> player-bg-image;
+    in property <color> player-accent-color: #ff7700;
+    in property <string> player-viz-path: "";
+    in property <string> player-viz-path-tips: "";
 
     callback player-toggle-play();
     callback player-next-track();
@@ -393,139 +416,254 @@ export component MainWindow inherits Window {
             width: 100%;
             vertical-stretch: 1;
 
-            // Home content
-            VerticalBox {
-                width: 100%;
-                height: 100%;
-                spacing: 0px;
-                padding: 0px;
+            // Left panel — brand
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width * 0.38;
+                height: parent.height;
 
-                // Centering spacers
-                Rectangle {
-                    vertical-stretch: 1;
-                }
-
-                // App title
-                Text {
-                    text: "R·Audio";
-                    color: white;
-                    font-size: 48px;
-                    font-weight: 800;
-                    horizontal-alignment: center;
-                }
-
-                // Tagline
-                Text {
-                    text: "YOUR MUSIC. ONE PLACE.";
-                    color: #ffffff55;
-                    font-size: 11px;
-                    font-weight: 600;
-                    letter-spacing: 4px;
-                    horizontal-alignment: center;
-                }
-
-                // Spacer
-                Rectangle {
-                    height: 20px;
-                }
-
-                // Thin divider line
-                Rectangle {
-                    height: 1px;
-                    background: #ffffff18;
-                    horizontal-stretch: 1;
-                }
-
-                Rectangle {
-                    height: 16px;
-                }
-
-                // Section label
-                Text {
-                    text: "SELECT A PROVIDER";
-                    color: #ffffff40;
-                    font-size: 10px;
-                    font-weight: 700;
-                    letter-spacing: 3px;
-                    horizontal-alignment: center;
-                }
-
-                Rectangle {
-                    height: 16px;
-                }
-
-                // Provider cards row
-                HorizontalLayout {
+                VerticalLayout {
                     alignment: center;
-                    spacing: 28px;
+                    spacing: 0px;
+                    padding: 20px;
 
-                    ProviderCard {
-                        title: "Spotify";
-                        has-logo: true;
-                        logo-source: @image-url("assets/Spotify.svg");
-                        clicked => {
-                            root.open-spotify-provider();
+                    Text {
+                        text: "R·Audio";
+                        color: white;
+                        font-size: 44px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle { height: 10px; }
+
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 32px;
+                            height: 1px;
+                            background: #ffffff20;
                         }
                     }
 
-                    ProviderCard {
-                        title: "Tidal";
-                        has-logo: true;
-                        logo-source: @image-url("assets/Tidal.png");
-                        brand-color: #000000;
-                        clicked => {
-                        }
+                    Rectangle { height: 10px; }
+
+                    Text {
+                        text: "YOUR MUSIC";
+                        color: #ffffff30;
+                        font-size: 9px;
+                        letter-spacing: 3px;
+                        horizontal-alignment: center;
                     }
 
-                    ProviderCard {
-                        title: "Audible";
-                        has-logo: true;
-                        logo-source: @image-url("assets/Audible.png");
-                        brand-color: #F5A623;
-                        clicked => {
-                        }
+                    Text {
+                        text: "ONE PLACE";
+                        color: #ffffff30;
+                        font-size: 9px;
+                        letter-spacing: 3px;
+                        horizontal-alignment: center;
                     }
                 }
+            }
 
-                Rectangle {
-                    height: 16px;
-                }
+            // Curved separator
+            Path {
+                x: parent.width * 0.38 - 20px;
+                y: 0;
+                width: 40px;
+                height: parent.height;
+                viewbox-x: 0;
+                viewbox-y: 0;
+                viewbox-width: 40;
+                viewbox-height: 600;
+                commands: "M 20 0 Q 40 300 20 600";
+                stroke: #ffffff15;
+                stroke-width: 0.8px;
+                fill: transparent;
+            }
 
-                HorizontalLayout {
+            // Right panel — provider list
+            Rectangle {
+                x: parent.width * 0.38;
+                y: 0;
+                width: parent.width * 0.62;
+                height: parent.height;
+
+                VerticalLayout {
                     alignment: center;
-                    spacing: 28px;
+                    spacing: 0px;
+                    padding-left: 28px;
+                    padding-right: 20px;
 
-                    ProviderCard {
-                        title: "Local";
-                        has-logo: true;
-                        logo-source: @image-url("assets/USB.svg");
-                        clicked => {
+                    Text {
+                        text: "SELECT PROVIDER";
+                        color: #ffffff28;
+                        font-size: 9px;
+                        font-weight: 700;
+                        letter-spacing: 2.5px;
+                    }
+
+                    Rectangle { height: 12px; }
+
+                    // Spotify — active
+                    Rectangle {
+                        height: 58px;
+                        border-radius: 12px;
+                        background: spotify-touch.pressed ? #1DB95430 : (spotify-touch.has-hover ? #1DB95420 : #1DB95415);
+                        border-width: 1px;
+                        border-color: #1DB95440;
+                        animate background { duration: 150ms; }
+
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 12px;
+
+                            Image {
+                                source: @image-url("assets/Spotify.svg");
+                                width: 28px;
+                                height: 28px;
+                                image-fit: contain;
+                                vertical-stretch: 0;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Spotify";
+                                color: white;
+                                font-size: 16px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            Path {
+                                width: 8px;
+                                height: 14px;
+                                commands: "M 2 2 L 6 7 L 2 12";
+                                stroke: #1DB95480;
+                                stroke-width: 1.5px;
+                                fill: transparent;
+                                vertical-stretch: 0;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+
+                        spotify-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.screensaver-user-active = true;
+                                root.open-spotify-provider();
+                            }
                         }
                     }
 
+                    Rectangle { height: 8px; }
+
+                    // Tidal — coming soon
                     Rectangle {
-                        width: 220px;
+                        height: 58px;
+                        border-radius: 12px;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: #ffffff0e;
+                        opacity: 0.42;
+
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 12px;
+
+                            Image {
+                                source: @image-url("assets/Tidal.png");
+                                width: 28px;
+                                height: 28px;
+                                image-fit: contain;
+                                vertical-stretch: 0;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Tidal";
+                                color: white;
+                                font-size: 16px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
 
+                    Rectangle { height: 8px; }
+
+                    // Audible — coming soon
                     Rectangle {
-                        width: 220px;
+                        height: 58px;
+                        border-radius: 12px;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: #ffffff0e;
+                        opacity: 0.42;
+
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 12px;
+
+                            Image {
+                                source: @image-url("assets/Audible.png");
+                                width: 28px;
+                                height: 28px;
+                                image-fit: contain;
+                                vertical-stretch: 0;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Audible";
+                                color: white;
+                                font-size: 16px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
-                }
 
-                Rectangle {
-                    height: 16px;
-                }
+                    Rectangle { height: 8px; }
 
-                // Footer hint
-                Text {
-                    text: "More providers coming soon";
-                    color: #ffffff28;
-                    font-size: 11px;
-                    horizontal-alignment: center;
-                }
+                    // Local Files — coming soon
+                    Rectangle {
+                        height: 58px;
+                        border-radius: 12px;
+                        background: transparent;
+                        border-width: 1px;
+                        border-color: #ffffff0e;
+                        opacity: 0.42;
 
-                Rectangle {
-                    vertical-stretch: 1;
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 12px;
+
+                            Image {
+                                source: @image-url("assets/USB.svg");
+                                width: 28px;
+                                height: 28px;
+                                image-fit: contain;
+                                colorize: #ffffff88;
+                                vertical-stretch: 0;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Local Files";
+                                color: white;
+                                font-size: 16px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -550,7 +688,10 @@ export component MainWindow inherits Window {
                 }
 
                 gear-touch := TouchArea {
-                    clicked => { root.active-view = "settings"; }
+                    clicked => {
+                        root.screensaver-user-active = true;
+                        root.active-view = "settings";
+                    }
                     mouse-cursor: pointer;
                 }
             }
@@ -608,27 +749,35 @@ export component MainWindow inherits Window {
                 user-playlists: root.spotify-user-playlists;
                 top-artists: root.spotify-top-artists;
                 go-back => {
+                    root.screensaver-user-active = true;
                     root.active-view = "home"
                 }
                 open-search => {
+                    root.screensaver-user-active = true;
                     root.active-view = "spotify-search"
                 }
                 play-track(id) => {
+                    root.screensaver-user-active = true;
                     root.play-track(id)
                 }
                 open-album(id) => {
+                    root.screensaver-user-active = true;
                     root.open-album(id)
                 }
                 open-artist(id) => {
+                    root.screensaver-user-active = true;
                     root.open-artist(id)
                 }
                 open-playlist(id, snapshot) => {
+                    root.screensaver-user-active = true;
                     root.open-playlist(id, snapshot)
                 }
                 switch-account => {
+                    root.screensaver-user-active = true;
                     root.spotify-switch-account();
                 }
                 logout => {
+                    root.screensaver-user-active = true;
                     root.spotify-logout-account(root.spotify-user-name)
                 }
                 }
@@ -929,40 +1078,50 @@ export component MainWindow inherits Window {
             is-saved: root.player-is-saved;
 
             toggle-play => {
+                root.screensaver-user-active = true;
                 root.player-toggle-play()
             }
             next-track => {
+                root.screensaver-user-active = true;
                 root.player-next-track()
             }
             prev-track => {
+                root.screensaver-user-active = true;
                 root.player-prev-track()
             }
             seek(val) => {
+                root.screensaver-user-active = true;
                 root.player-seek(val)
             }
             change-volume(val) => {
+                root.screensaver-user-active = true;
                 root.player-change-volume(val)
             }
             add-to-liked-songs(tid) => {
+                root.screensaver-user-active = true;
                 root.player-add-to-liked-songs(tid)
             }
             remove-from-liked-songs(tid) => {
+                root.screensaver-user-active = true;
                 root.player-remove-from-liked-songs(tid)
             }
             add-to-playlist(tid, pid) => {
+                root.screensaver-user-active = true;
                 root.player-add-to-playlist(tid, pid)
             }
             remove-from-playlist(tid, pid) => {
+                root.screensaver-user-active = true;
                 root.player-remove-from-playlist(tid, pid)
             }
             expand => {
+                root.screensaver-user-active = true;
                 root.player-expanded = true;
             }
         }
     }
 
     // Full screen player overlay drawer
-    if root.player-track-title != "": FullPlayer {
+    if root.player-track-title != "": FullPlayerV2 {
         width: 100%;
         height: 100%;
         x: 0;
@@ -980,29 +1139,40 @@ export component MainWindow inherits Window {
         is-liked: root.player-is-liked;
         spectrum-bands: root.player-spectrum-bands;
         bg-image: root.player-bg-image;
+        accent-color: root.player-accent-color;
+        viz-path: root.player-viz-path;
+        viz-path-tips: root.player-viz-path-tips;
 
         toggle-play => {
+            root.screensaver-user-active = true;
             root.player-toggle-play()
         }
         next-track => {
+            root.screensaver-user-active = true;
             root.player-next-track()
         }
         prev-track => {
+            root.screensaver-user-active = true;
             root.player-prev-track()
         }
         seek(val) => {
+            root.screensaver-user-active = true;
             root.player-seek(val)
         }
         change-volume(val) => {
+            root.screensaver-user-active = true;
             root.player-change-volume(val)
         }
         add-to-liked-songs(tid) => {
+            root.screensaver-user-active = true;
             root.player-add-to-liked-songs(tid)
         }
         remove-from-liked-songs(tid) => {
+            root.screensaver-user-active = true;
             root.player-remove-from-liked-songs(tid)
         }
         collapse => {
+            root.screensaver-user-active = true;
             root.player-expanded = false;
         }
 
@@ -1013,56 +1183,54 @@ export component MainWindow inherits Window {
     }
 
     // ── Screensaver overlay ───────────────────────────────────────────────
-    // Two modes: song playing shows album art + info; no song shows the
-    // R·Audio logo over the animated orb background. Swipe up to dismiss.
+    // Outer Rectangle owns the y-animation and swipe-up-to-dismiss gesture.
+    // FullPlayerV2 inside provides the full visual (particle tunnel, circular
+    // visualizer, album art). The overlay TouchArea sits on top so swipe-up
+    // always works; the caret hint is rendered last (highest z).
     Rectangle {
         width: 100%;
         height: 100%;
         x: 0;
         y: root.screensaver-exiting ? -parent.height
            : (root.screensaver-active ? -root.screensaver-drag-offset : -parent.height);
-        background: @linear-gradient(180deg, #160d26fa 0%, #08040dfd 100%);
+        background: transparent;
+        clip: true;
         animate y { duration: root.screensaver-dragging ? 0ms : 350ms; easing: ease-out; }
 
-        // Album-art derived gradient (no-op when empty)
-        Image {
-            source: root.player-bg-image;
+        FullPlayerV2 {
             width: 100%;
             height: 100%;
-            image-fit: fill;
+            show-collapse: false;
+
+            is-playing: root.player-is-playing;
+            track-title: root.player-track-title;
+            track-artist: root.player-track-artist;
+            track-id: root.player-track-id;
+            album-cover: root.player-album-cover;
+            current-time-str: root.player-current-time-str;
+            total-time-str: root.player-total-time-str;
+            progress-percent: root.player-progress-percent;
+            volume <=> root.player-volume;
+            is-liked: root.player-is-liked;
+            spectrum-bands: root.player-spectrum-bands;
+            bg-image: root.player-bg-image;
+            accent-color: root.player-accent-color;
+            viz-path: root.player-viz-path;
+            viz-path-tips: root.player-viz-path-tips;
+
+            toggle-play => { root.player-toggle-play() }
+            next-track  => { root.player-next-track() }
+            prev-track  => { root.player-prev-track() }
+            seek(val)   => { root.player-seek(val) }
+            change-volume(val) => { root.player-change-volume(val) }
+            add-to-liked-songs(tid) => { root.player-add-to-liked-songs(tid) }
+            remove-from-liked-songs(tid) => { root.player-remove-from-liked-songs(tid) }
+            collapse => { root.screensaver-exiting = true; }
         }
 
-        // Ambient spectrum — only when a track is loaded
-        if root.player-track-title != "": HorizontalLayout {
-            alignment: space-around;
-            padding-left: 24px;
-            padding-right: 24px;
-            width: 100%;
-            height: 72%;
-            y: (parent.height - self.height) / 2;
-            opacity: 0.42;
-            for band in root.player-spectrum-bands: Rectangle {
-                width: 14px;
-                Rectangle {
-                    width: 14px;
-                    height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
-                    y: parent.height / 2 - self.height + 3px;
-                    background: @linear-gradient(180deg, #7f00ffbb 0%, #ff2a5f 100%);
-                    border-radius: 3px;
-                    animate height { duration: 40ms; easing: ease-out; }
-                }
-                Rectangle {
-                    width: 14px;
-                    height: band * (parent.height / 2) > 3px ? band * (parent.height / 2) : 3px;
-                    y: parent.height / 2 - 3px;
-                    background: @linear-gradient(180deg, #ff2a5f 0%, #7f00ffbb 100%);
-                    border-radius: 3px;
-                    animate height { duration: 40ms; easing: ease-out; }
-                }
-            }
-        }
-
-        // Swipe-up to dismiss — fills the whole overlay, no other interactive elements
+        // Full-screen swipe detector — sits above FullPlayerV2 so the swipe
+        // gesture always works. Simple taps pass-through intent via the drag
+        // threshold check (< 40 px = not a swipe, no action).
         TouchArea {
             width: 100%;
             height: 100%;
@@ -1074,8 +1242,6 @@ export component MainWindow inherits Window {
             }
             pointer-event(e) => {
                 if e.kind == PointerEventKind.down {
-                    // Capture start position ourselves — don't rely on pressed-y
-                    // being valid later when the up event fires on touchscreen.
                     root.screensaver-touch-start-y = self.mouse-y;
                 } else if e.kind == PointerEventKind.up {
                     root.screensaver-dragging = false;
@@ -1090,58 +1256,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ── Song playing: album art + track info ──────────────────────────
-        if root.player-track-title != "": VerticalLayout {
-            width: 100%;
-            height: 100%;
-            alignment: center;
-            spacing: 24px;
-
-            HorizontalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 280px;
-                    height: 280px;
-                    border-radius: 16px;
-                    background: #1e1e24;
-                    clip: true;
-                    border-width: 1px;
-                    border-color: #ffffff1c;
-                    drop-shadow-color: #0000009c;
-                    drop-shadow-blur: 28px;
-                    drop-shadow-offset-y: 14px;
-                    Image {
-                        source: root.player-album-cover;
-                        width: 100%;
-                        height: 100%;
-                        image-fit: contain;
-                    }
-                }
-            }
-
-            VerticalLayout {
-                alignment: center;
-                spacing: 6px;
-                Text {
-                    text: root.player-track-title;
-                    color: white;
-                    font-size: 24px;
-                    font-weight: 800;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                }
-                Text {
-                    text: root.player-track-artist;
-                    color: #b3b3b3;
-                    font-size: 15px;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                }
-            }
-        }
-
-
-        // Swipe-up caret hint at the bottom
+        // Swipe-up caret hint
         Path {
             x: (parent.width - self.width) / 2;
             y: parent.height - 36px;
@@ -1438,5 +1553,23 @@ export component MainWindow inherits Window {
         width:   100%;
         height:  100%;
         opacity: root.boot-overlay-alpha;
+    }
+
+    // ── Power-options overlay ─────────────────────────────────────────────
+    // Topmost layer. Revealed by the Rust power-button listener after a short
+    // hold of the hardware power button (see spawn_power_button_listener).
+    PowerOverlay {
+        width: 100%;
+        height: 100%;
+        active: root.power-overlay-active;
+        cancel => { root.power-overlay-active = false; }
+        restart => {
+            root.power-overlay-active = false;
+            root.invoke-restart();
+        }
+        shutdown => {
+            root.power-overlay-active = false;
+            root.invoke-poweroff();
+        }
     }
 }

@@ -56,7 +56,7 @@ fi
 # ------------------------------------------------------------------------------
 echo "Installing dependencies (xorriso, wget)..."
 apt-get update -qq
-apt-get install -y -qq xorriso wget
+apt-get install -y -qq xorriso wget librsvg2-bin
 
 # ------------------------------------------------------------------------------
 # Locate or download the official Debian DVD1
@@ -115,6 +115,14 @@ chmod +x \
     "$WORK_DIR/payload/r-audio-launcher" \
     "$WORK_DIR/payload/postinstall.sh"
 
+# Plymouth boot theme — convert SVG logo to PNG and bundle theme files
+echo "Staging Plymouth boot theme..."
+mkdir -p "$WORK_DIR/payload/r-audio-plymouth"
+rsvg-convert -w 300 -h 300 ../ui/assets/raudio-logo.svg \
+    -o "$WORK_DIR/payload/r-audio-plymouth/logo.png"
+cp plymouth/r-audio.plymouth "$WORK_DIR/payload/r-audio-plymouth/"
+cp plymouth/r-audio.script   "$WORK_DIR/payload/r-audio-plymouth/"
+
 # ------------------------------------------------------------------------------
 # Inject sensitive runtime secrets from the build environment.
 #
@@ -164,7 +172,7 @@ mkdir -p "$DEBS_DIR"
 # Packages the kiosk needs that aren't on Debian DVD1, plus any r-audio
 # runtime libs we want to bundle defensively.
 # Must be ONE line — newlines in the value break the `bash -c` string below.
-KIOSK_PKGS="openbox onboard pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libglib2.0-bin libssl3 dnsmasq-base dbus wmctrl xdotool at-spi2-core dconf-gsettings-backend mousetweaks fonts-dejavu-core python3 python3-gi python3-gi-cairo"
+KIOSK_PKGS="plymouth openbox pulseaudio libavahi-compat-libdnssd1 bluez bluez-tools iw rfkill xserver-xorg-legacy libfontconfig1 libfreetype6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgles2 libgl1 libglib2.0-0 libssl3 dnsmasq-base dbus fonts-dejavu-core"
 
 # Check for a pre-populated cache (used by CI to skip the docker download).
 # Set R_AUDIO_DEBS_CACHE to a directory path to enable.
@@ -174,11 +182,10 @@ if [ -n "${R_AUDIO_DEBS_CACHE:-}" ] && [ -d "$R_AUDIO_DEBS_CACHE" ] && \
     cp "$R_AUDIO_DEBS_CACHE"/*.deb "$DEBS_DIR/"
 else
     # shellcheck disable=SC2086
-    # NOTE: deliberately NOT using --no-install-recommends here. Complex
-    # Python/GTK packages like onboard need their Recommends bundled too —
-    # otherwise dpkg -i during postinstall configures them only partially
-    # and the binary may end up missing/non-functional. The +30-50MB ISO
-    # size hit is worth the install reliability.
+    # NOTE: deliberately NOT using --no-install-recommends here. Bundling each
+    # package's Recommends too keeps the offline dpkg -i in postinstall from
+    # configuring something only partially and leaving a binary non-functional.
+    # The modest ISO size hit is worth the install reliability.
     docker run --rm \
         -v "$(realpath "$DEBS_DIR")":/debs \
         debian:trixie-slim bash -c "

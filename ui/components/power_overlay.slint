@@ -1,0 +1,109 @@
+// Power-options overlay.
+//
+// Shown when the hardware power button is *held* (the Rust evdev listener in
+// src/main.rs flips `active` true after a short hold). A quick press instead
+// suspends the device; holding for a continuous 10 s forces a shutdown even
+// without touching this overlay. While the overlay is up the user can tap one
+// of the three explicit choices below.
+//
+// Like the other top-level overlays (TextInputDialog, VirtualKeyboard) this is
+// instantiated at the WINDOW ROOT so its buttons act on a single tap.
+
+// A single full-width pill button used for each power action.
+component PowerChoice inherits Rectangle {
+    in property <string> label;
+    in property <color> base-color;
+    in property <color> hover-color;
+    in property <color> text-color: white;
+    callback clicked();
+
+    height: 56px;
+    border-radius: 28px;
+    background: touch.has-hover ? root.hover-color : root.base-color;
+    animate background { duration: 120ms; }
+
+    Text {
+        text: root.label;
+        color: root.text-color;
+        font-size: 17px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component PowerOverlay inherits Rectangle {
+    in property <bool> active: false;
+
+    callback cancel();
+    callback restart();
+    callback shutdown();
+
+    if root.active: Rectangle {
+        // Dimmed backdrop. Tapping it (outside the card) cancels, matching the
+        // conventional "tap away to dismiss" behaviour of a modal.
+        background: #000000c0;
+        TouchArea { clicked => { root.cancel(); } }
+
+        Rectangle {
+            width: min(360px, parent.width - 48px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #1e1f2b;
+            border-radius: 20px;
+            border-width: 1px;
+            border-color: #ffffff1f;
+            drop-shadow-color: #000000aa;
+            drop-shadow-blur: 30px;
+            drop-shadow-offset-y: 8px;
+
+            // Swallow taps on the card itself so they don't fall through to the
+            // backdrop's cancel handler.
+            TouchArea {}
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+
+                Text {
+                    text: "Power";
+                    color: white;
+                    font-size: 20px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Hold the power button for 10s to force shutdown";
+                    color: #ffffff99;
+                    font-size: 12px;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                PowerChoice {
+                    label: "Cancel";
+                    base-color: #ffffff14;
+                    hover-color: #ffffff22;
+                    clicked => { root.cancel(); }
+                }
+                PowerChoice {
+                    label: "Restart";
+                    base-color: #2563EB;
+                    hover-color: #3B82F6;
+                    clicked => { root.restart(); }
+                }
+                PowerChoice {
+                    label: "Shutdown";
+                    base-color: #DC2626;
+                    hover-color: #EF4444;
+                    clicked => { root.shutdown(); }
+                }
+            }
+        }
+    }
+}

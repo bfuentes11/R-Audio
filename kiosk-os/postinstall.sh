@@ -150,74 +150,72 @@ in-target sh -c 'dpkg --configure -a 2>&1 | tee -a /var/log/r-audio-dpkg.log' ||
     echo "[postinstall] WARNING: dpkg --configure -a still has unconfigured packages."
 }
 
-# Ensure the /usr/bin/python3 symlink exists. The offline dpkg install can
-# unpack python3.NN without configuring python3-minimal (which ships the
-# unversioned symlink), leaving onboard's "#!/usr/bin/python3" shebang broken.
-# Create it defensively by pointing at the newest installed python3.NN.
-if [ ! -e /target/usr/bin/python3 ]; then
-    PY=$(ls -1 /target/usr/bin/python3.[0-9]* 2>/dev/null | sort -V | tail -n1)
-    if [ -n "$PY" ]; then
-        ln -sf "$(basename "$PY")" /target/usr/bin/python3
-        echo "[postinstall] Created /usr/bin/python3 -> $(basename "$PY")"
-    else
-        echo "[postinstall] WARNING: no python3.NN found — cannot create python3 symlink"
-    fi
-fi
-
-# Recompile GLib schemas. The offline dpkg install doesn't reliably fire the
-# glib-compile-schemas trigger, so onboard's org.onboard schema may be present
-# as XML but absent from gschemas.compiled — which makes `gsettings set` fail
-# with "schema missing" and prevents us tuning onboard's behaviour.
-if in-target sh -c 'command -v glib-compile-schemas >/dev/null 2>&1'; then
-    in-target glib-compile-schemas /usr/share/glib-2.0/schemas \
-        && echo "[postinstall] Recompiled GLib schemas" \
-        || echo "[postinstall] WARNING: glib-compile-schemas failed"
-else
-    echo "[postinstall] WARNING: glib-compile-schemas not found (libglib2.0-bin missing?)"
-fi
-
 # Explicit sanity check on the critical kiosk binaries. If any of these are
-# missing the kiosk will boot but lose a feature, and we want to know.
-for bin in /target/usr/bin/onboard /target/usr/bin/wmctrl /target/usr/bin/xdotool /target/usr/bin/openbox-session /target/usr/bin/python3; do
+# missing the kiosk will boot but lose a feature, and we want to know. The
+# on-screen keyboard is now rendered in-process by r-audio (Slint
+# VirtualKeyboard), so there's no external keyboard binary to verify here —
+# only the window manager and audio server the launcher chain depends on.
+for bin in /target/usr/bin/openbox-session /target/usr/bin/pulseaudio; do
     if [ -x "$bin" ]; then
         echo "[postinstall] OK: $bin"
     else
         echo "[postinstall] MISSING: $bin (check /var/log/r-audio-dpkg.log on the kiosk)"
     fi
 done
-# Also confirm onboard can be imported by Python — catches partial installs
-# where the binary exists but the Python package is misconfigured.
-in-target python3 -c "import Onboard; print('[postinstall] onboard Python import: OK')" 2>&1 || \
-    echo "[postinstall] WARNING: onboard Python import FAILED — on-screen keyboard will not work"
 
 # Clean up the deb cache once installed.
 rm -rf /target/var/cache/r-audio-debs
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Plymouth boot theme — install before update-initramfs so it's bundled in
+# the initrd and visible from the very first frame of the boot sequence.
+# ──────────────────────────────────────────────────────────────────────────────
+echo "[postinstall] Installing Plymouth boot theme..."
+PLYMOUTH_DIR=/target/usr/share/plymouth/themes/r-audio
+mkdir -p "$PLYMOUTH_DIR"
+cp "$PAYLOAD/r-audio-plymouth/logo.png"         "$PLYMOUTH_DIR/"
+cp "$PAYLOAD/r-audio-plymouth/r-audio.plymouth" "$PLYMOUTH_DIR/"
+cp "$PAYLOAD/r-audio-plymouth/r-audio.script"   "$PLYMOUTH_DIR/"
+
+in-target update-alternatives --install \
+    /usr/share/plymouth/themes/default.plymouth \
+    default.plymouth \
+    /usr/share/plymouth/themes/r-audio/r-audio.plymouth 100
+in-target update-alternatives --set \
+    default.plymouth \
+    /usr/share/plymouth/themes/r-audio/r-audio.plymouth
+
+# Tell initramfs-tools to include framebuffer support (required for Plymouth).
+mkdir -p /target/etc/initramfs-tools/conf.d
+echo "FRAMEBUFFER=y" > /target/etc/initramfs-tools/conf.d/plymouth.conf
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Power Management — configure power button to suspend (sleep) instead of poweroff.
 # ──────────────────────────────────────────────────────────────────────────────
-echo "[postinstall] Configuring power button to suspend (sleep) instead of poweroff..."
+echo "[postinstall] Configuring logind to ignore power button (app handles it via evdev)..."
 mkdir -p /target/etc/systemd/logind.conf.d
 cat > /target/etc/systemd/logind.conf.d/kiosk.conf <<'EOF'
 [Login]
-HandlePowerKey=suspend
+HandlePowerKey=ignore
 EOF
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Boot appearance — suppress all kernel/systemd console output and hide GRUB.
-# No Plymouth: the screen goes black immediately after GRUB and stays black
-# until r-audio's own Slint UI takes over. This is cleaner and simpler than
-# Plymouth since we own the whole display from the moment the app launches.
+# Boot appearance — suppress kernel/systemd console output and hide GRUB.
+# Plymouth shows the R-Audio splash during boot; GRUB_GFXPAYLOAD_LINUX=keep
+# keeps the framebuffer mode so there is no flash between GRUB and Plymouth.
 # ──────────────────────────────────────────────────────────────────────────────
-echo "[postinstall] Configuring silent boot (no Plymouth)..."
+echo "[postinstall] Configuring silent boot..."
 
 # Suppress kernel messages, systemd status, udev noise, and the VT cursor.
-sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=0 rd.systemd.show_status=false systemd.show_status=false rd.udev.log_level=3 vt.global_cursor_default=0 fbcon=nodefer"|' /target/etc/default/grub
+sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=0 rd.systemd.show_status=false systemd.show_status=false rd.udev.log_level=3 vt.global_cursor_default=0 fbcon=nodefer splash"|' /target/etc/default/grub
 
 # Completely hide the GRUB menu — zero-second timeout, no countdown.
 sed -i 's|^GRUB_TIMEOUT=.*|GRUB_TIMEOUT=0|' /target/etc/default/grub
 echo 'GRUB_TIMEOUT_STYLE=hidden' >> /target/etc/default/grub
 echo 'GRUB_HIDDEN_TIMEOUT=0' >> /target/etc/default/grub
+# Keep framebuffer mode when handing off to the kernel so Plymouth takes over
+# with no mode-switch flash — screen stays dark the entire time.
+echo 'GRUB_GFXPAYLOAD_LINUX=keep' >> /target/etc/default/grub
 
 # Rebuild initramfs (picks up firmware/driver changes) and regenerate GRUB config.
 in-target update-initramfs -u

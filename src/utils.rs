@@ -74,6 +74,14 @@ pub fn extract_dominant_hsv(buf: &SharedPixelBuffer<slint::Rgba8Pixel>) -> (f32,
     (hue, sat.max(0.35), val.max(0.4))
 }
 
+/// Convert the dominant HSV to a vivid RGB accent colour for UI tinting.
+/// Saturation is boosted slightly so muted album art still produces a
+/// recognisable accent rather than a grey.
+pub fn hsv_to_accent_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+    let (r, g, b) = hsv_to_rgb(h, (s * 1.25).min(1.0), (v * 1.1).min(1.0));
+    ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+}
+
 /// Build a 2×256 vertical gradient image from the dominant HSV colour.
 /// Top: darkened vibrant hue; middle: much darker; bottom: near-black.
 /// The tiny image is stretched to fill the full player via image-fit: fill.

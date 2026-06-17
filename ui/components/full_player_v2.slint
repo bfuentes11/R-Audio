@@ -1,0 +1,586 @@
+export component FullPlayerV2 inherits Rectangle {
+    in property <bool> is-playing:          false;
+    in property <string> track-title:         "";
+    in property <string> track-artist:        "";
+    in property <image> album-cover;
+    in property <string> current-time-str:    "0:00";
+    in property <string> total-time-str:      "0:00";
+    in property <float> progress-percent:    0.0;   // 0.0–1.0
+    in-out property <float> volume:          0.25;   // 0.0–1.0
+    in property <string> track-id:            "";
+    in property <bool> is-liked:             false;
+    in property <[float]> spectrum-bands:    [];
+    in property <image> bg-image;
+    in property <string> viz-path:           "";
+    in property <string> viz-path-tips:      "";
+    in property <color>  accent-color:       #ff7700;
+    in property <bool>   show-collapse:      true;
+
+    callback toggle-play();
+    callback next-track();
+    callback prev-track();
+    callback seek(float);
+    callback change-volume(float);
+    callback add-to-liked-songs(string);
+    callback remove-from-liked-songs(string);
+    callback collapse();
+
+    // ── Controls auto-hide ────────────────────────────────────────────────
+    // The control "island" (seek bar + transport buttons + volume) fades
+    // out after 10 s of no interaction, or immediately when the user taps
+    // an empty area. Tapping again brings it back for another 10 s. The
+    // album art naturally re-centers because the controls' wrapper shrinks
+    // its height to 0, and the VerticalLayout has `alignment: center`.
+    property <bool> controls-visible: true;
+    property <float> controls-alpha: root.controls-visible ? 1.0 : 0.0;
+    animate controls-alpha {
+        duration: 280ms;
+        easing: ease-out;
+    }
+    controls-timer := Timer {
+        interval: 10s;
+        running: root.controls-visible;
+        triggered => {
+            root.controls-visible = false;
+        }
+    }
+
+    clip: true;
+
+    // Radial gradient: slightly lighter in the center, darkening outward.
+    background: @radial-gradient(circle, #1e1240ff 0%, #100828ff 55%, #04010aff 100%);
+
+    // Album-derived gradient overlay — stretches to fill; empty image = no-op
+    Image {
+        source: root.bg-image;
+        width: 100%;
+        height: 100%;
+        image-fit: fill;
+    }
+
+    // Intercept touch/click events to prevent leakage to elements behind the
+    // player, AND act as the toggle for the controls island. Any tap that
+    // doesn't hit a button (collapse, like, play/pause, seek, volume) falls
+    // through to this area and flips controls-visible — restarting the 10 s
+    // auto-hide timer when re-showing.
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => {
+            root.controls-visible = !root.controls-visible;
+        }
+    }
+
+    // Tunnel vanishing-point glow — soft bloom at screen center.
+    // Sells the "light source at the end of the tunnel" depth illusion.
+    Rectangle {
+        x: (parent.width  - self.width)  / 2;
+        y: (parent.height - self.height) / 2;
+        width:  220px;
+        height: 220px;
+        border-radius: 110px;
+        background: @radial-gradient(circle, #ffffff14 0%, #ffffff00 100%);
+        opacity: 0.8;
+    }
+
+    // Particle tunnel — full-screen background layer.
+    // Three passes: wide halo → accent body → white hot stars.
+    // Viewbox 900×600 matches Surface Go 2 (3:2) so streaks stay proportional.
+    // fill applies to the closed star subpaths; open streak lines ignore it.
+    Path {
+        x: 0; y: 0;
+        width: parent.width; height: parent.height;
+        viewbox-x: 0; viewbox-y: 0; viewbox-width: 900; viewbox-height: 600;
+        commands: root.viz-path-tips;
+        stroke: root.accent-color;
+        stroke-width: 7px;
+        fill: root.accent-color;
+        opacity: 0.18;
+    }
+    Path {
+        x: 0; y: 0;
+        width: parent.width; height: parent.height;
+        viewbox-x: 0; viewbox-y: 0; viewbox-width: 900; viewbox-height: 600;
+        commands: root.viz-path-tips;
+        stroke: root.accent-color;
+        stroke-width: 2.5px;
+        fill: root.accent-color;
+        opacity: 0.45;
+    }
+    // Hot star pass — bright-white stroke + fill so star spikes glow white.
+    Path {
+        x: 0; y: 0;
+        width: parent.width; height: parent.height;
+        viewbox-x: 0; viewbox-y: 0; viewbox-width: 900; viewbox-height: 600;
+        commands: root.viz-path-tips;
+        stroke: #ffffffee;
+        stroke-width: 1.2px;
+        fill: #ffffff55;
+        opacity: 0.4;
+    }
+
+    // --- TOP CONTROL BAR ---
+    HorizontalLayout {
+        y: 24px;
+        width: 100%;
+        padding-left: 28px;
+        padding-right: 28px;
+        alignment: space-between;
+
+        collapse-btn := TouchArea {
+            width: root.show-collapse ? 44px : 0px;
+            height: 44px;
+            opacity: root.show-collapse ? 1.0 : 0.0;
+            mouse-cursor: pointer;
+            clicked => {
+                root.collapse();
+            }
+
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: 22px;
+                background: collapse-btn.pressed ? #ffffff22 : (collapse-btn.has-hover ? #ffffff11 : transparent);
+                animate background { duration: 150ms; }
+
+                Path {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 18px;
+                    height: 11px;
+                    commands: "M 2 2 L 9 9 L 16 2";
+                    stroke: collapse-btn.has-hover ? white : #b3b3b3;
+                    stroke-width: 2.5px;
+                    fill: transparent;
+                    animate stroke { duration: 150ms; }
+                }
+            }
+        }
+
+        Rectangle { width: 0px; }
+
+        Rectangle {
+            width: 44px;
+            height: 44px;
+        }
+    }
+
+    // --- MAIN VIEWPORT (CENTER ALIGNED) ---
+    VerticalLayout {
+        width: 100%;
+        alignment: center;
+        spacing: 32px;
+        padding-top: 40px;
+        padding-bottom: 20px;
+
+        // Album Art (left) + Circular Visualizer (right)
+        HorizontalLayout {
+            width: 100%;
+            alignment: center;
+            spacing: 48px;
+
+            // Album Art
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 260px;
+                    height: 260px;
+                    border-radius: 16px;
+                    background: #1e1e24;
+                    clip: true;
+                    border-width: 1px;
+                    border-color: #ffffff1c;
+                    drop-shadow-color: #0000009c;
+                    drop-shadow-blur: 28px;
+                    drop-shadow-offset-y: 14px;
+
+                    Image {
+                        source: root.album-cover;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: contain;
+                    }
+                }
+            }
+
+            // Circular Visualizer
+            // viz-path      — 120 outer radial bars, orange→amber gradient
+            // viz-path-tips — particle tunnel (full-screen, rendered above)
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 260px;
+                    height: 260px;
+                    background: transparent;
+
+                    // Ring baseline
+                    Path {
+                        x: 0px; y: 0px; width: parent.width; height: parent.height;
+                        viewbox-x: 0; viewbox-y: 0; viewbox-width: 260; viewbox-height: 260;
+                        stroke: #ff660044;
+                        stroke-width: 1.5px;
+                        fill: transparent;
+                        MoveTo { x: 208; y: 130; }
+                        ArcTo { radius-x: 78; radius-y: 78; large-arc: false; sweep: false; x: 52; y: 130; }
+                        ArcTo { radius-x: 78; radius-y: 78; large-arc: false; sweep: false; x: 208; y: 130; }
+                    }
+                    // Bars — deep red-orange root haze (gradient base)
+                    Path {
+                        x: 0px; y: 0px; width: parent.width; height: parent.height;
+                        viewbox-x: 0; viewbox-y: 0; viewbox-width: 260; viewbox-height: 260;
+                        commands: root.viz-path;
+                        stroke: #bb220012;
+                        stroke-width: 16px;
+                        fill: transparent;
+                    }
+                    // Bars — saturated orange mid-glow
+                    Path {
+                        x: 0px; y: 0px; width: parent.width; height: parent.height;
+                        viewbox-x: 0; viewbox-y: 0; viewbox-width: 260; viewbox-height: 260;
+                        commands: root.viz-path;
+                        stroke: #ff620049;
+                        stroke-width: 4px;
+                        fill: transparent;
+                    }
+                    // Bars — bright amber/gold sharp core (gradient tip)
+                    Path {
+                        x: 0px; y: 0px; width: parent.width; height: parent.height;
+                        viewbox-x: 0; viewbox-y: 0; viewbox-width: 260; viewbox-height: 260;
+                        commands: root.viz-path;
+                        stroke: #ffcc44ee;
+                        stroke-width: 1.3px;
+                        fill: transparent;
+                    }
+                }
+            }
+        }
+
+        // Track Information
+        VerticalLayout {
+            width: 100%;
+            spacing: 6px;
+            alignment: center;
+
+            Text {
+                text: root.track-title != "" ? root.track-title : "Not Playing";
+                color: white;
+                font-size: 24px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.track-artist;
+                color: #b3b3b3;
+                font-size: 15px;
+                font-weight: 500;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        // Premium Floating Control Console
+        // The outer wrapper's height shrinks to 0 when controls are hidden;
+        // the VerticalLayout containing it (alignment: center) then re-centers
+        // the album art and track info downward as the height animates. `clip`
+        // hides the inner island as it gets cut off mid-animation.
+        Rectangle {
+            width: 100%;
+            height: root.controls-visible ? 138px : 0px;
+            opacity: root.controls-alpha;
+            clip: true;
+            animate height {
+                duration: 320ms;
+                easing: ease-out;
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Math.min(800px, parent.width - 48px);
+                background: #ffffff03;
+                border-radius: 24px;
+                border-width: 1px;
+                border-color: #ffffff08;
+
+                VerticalLayout {
+                    padding-top: 20px;
+                    padding-bottom: 20px;
+                    padding-left: 28px;
+                    padding-right: 28px;
+                    spacing: 16px;
+
+                    // Large Seek Slider
+                    HorizontalLayout {
+                        width: 100%;
+                        spacing: 14px;
+
+                        Text {
+                            text: root.current-time-str;
+                            color: #a7a7a7;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            min-width: 40px;
+                            horizontal-alignment: right;
+                        }
+
+                        progress-area := TouchArea {
+                            horizontal-stretch: 1;
+                            height: 24px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.seek(Math.clamp(self.mouse-x / self.width, 0.0, 1.0));
+                            }
+                            moved => {
+                                if (self.pressed) {
+                                    root.seek(Math.clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                }
+                            }
+                            Rectangle {
+                                y: (parent.height - self.height) / 2;
+                                width: 100%;
+                                height: progress-area.has-hover ? 7px : 5px;
+                                border-radius: 3px;
+                                background: #3d3d3d;
+                                animate height {
+                                    duration: 120ms;
+                                    easing: ease-out;
+                                }
+                                Rectangle {
+                                    x: 0;
+                                    width: parent.width * root.progress-percent;
+                                    height: 100%;
+                                    border-radius: 3px;
+                                    background: progress-area.has-hover ? #1db954 : white;
+                                    animate background { duration: 150ms; }
+                                }
+                                if (progress-area.has-hover): Rectangle {
+                                    x: (parent.width * root.progress-percent) - 7px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 14px;
+                                    height: 14px;
+                                    border-radius: 7px;
+                                    background: white;
+                                    drop-shadow-blur: 4px;
+                                    drop-shadow-color: #00000044;
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: root.total-time-str;
+                            color: #a7a7a7;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            min-width: 40px;
+                        }
+                    }
+
+                    // Large Controls & Options Row
+                    Rectangle {
+                        height: 58px;
+                        width: 100%;
+
+                        // Heart Like Icon (Left)
+                        Rectangle {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            width: 36px;
+                            height: 36px;
+
+                            like-btn := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.add-to-liked-songs(root.track-id);
+                                }
+                                Rectangle {
+                                    width: 100%;
+                                    height: 100%;
+                                    border-radius: 18px;
+                                    background: like-btn.pressed ? #ffffff11 : transparent;
+
+                                    Image {
+                                        source: @image-url("../assets/Heart.svg");
+                                        width: 20px;
+                                        height: 20px;
+                                        colorize: root.is-liked ? #1db954 : (like-btn.has-hover ? white : #888888);
+                                        animate colorize { duration: 150ms; }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Prev / Play / Next Group (Center) - True Centered
+                        HorizontalLayout {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            spacing: 32px;
+                            alignment: center;
+
+                            // Prev
+                            VerticalLayout {
+                                alignment: center;
+                                prev-btn := TouchArea {
+                                    width: 28px;
+                                    height: 28px;
+                                    clicked => {
+                                        root.prev-track()
+                                    }
+                                    Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: @image-url("../assets/Player_PreviousBtn.svg");
+                                        colorize: prev-btn.pressed ? #555555 : (prev-btn.has-hover ? white : #aaaaaa);
+                                        animate colorize { duration: 100ms; }
+                                    }
+                                }
+                            }
+
+                            // Play/Pause
+                            VerticalLayout {
+                                alignment: center;
+                                play-btn := TouchArea {
+                                    width: 58px;
+                                    height: 58px;
+                                    clicked => {
+                                        root.toggle-play()
+                                    }
+                                    Rectangle {
+                                        width: 100%;
+                                        height: 100%;
+                                        border-radius: 29px;
+                                        background: play-btn.has-hover ? white : #eeeeee;
+                                        animate background { duration: 100ms; }
+                                        drop-shadow-color: #00000044;
+                                        drop-shadow-blur: 10px;
+
+                                        if root.is-playing: Rectangle {
+                                            width: 15px;
+                                            height: 18px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+
+                                            Rectangle {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: 5px;
+                                                height: 18px;
+                                                background: #121212;
+                                                border-radius: 1.5px;
+                                            }
+                                            Rectangle {
+                                                x: 10px;
+                                                y: 0px;
+                                                width: 5px;
+                                                height: 18px;
+                                                background: #121212;
+                                                border-radius: 1.5px;
+                                            }
+                                        }
+                                        if !root.is-playing: Path {
+                                            x: (parent.width - self.width) / 2 + 2px; // Visual center offset
+                                            y: (parent.height - self.height) / 2;
+                                            width: 16px;
+                                            height: 18px;
+                                            commands: "M 0 0 L 16 9 L 0 18 Z";
+                                            fill: #121212;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Next
+                            VerticalLayout {
+                                alignment: center;
+                                next-btn := TouchArea {
+                                    width: 28px;
+                                    height: 28px;
+                                    clicked => {
+                                        root.next-track()
+                                    }
+                                    Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: @image-url("../assets/Player_NextBtn.svg");
+                                        colorize: next-btn.pressed ? #555555 : (next-btn.has-hover ? white : #aaaaaa);
+                                        animate colorize { duration: 100ms; }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Volume Slider Group (Right)
+                        HorizontalLayout {
+                            x: parent.width - self.width;
+                            y: (parent.height - self.height) / 2;
+                            alignment: end;
+                            spacing: 8px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    Path {
+                                        width: 100%;
+                                        height: 100%;
+                                        commands: "M 2 6 L 2 10 L 5 10 L 9 14 L 9 2 L 5 6 Z M 11 4 A 6 6 0 0 1 11 12";
+                                        stroke: root.volume > 0 ? #b3b3b3 : #555555;
+                                        stroke-width: 1.5px;
+                                        fill: transparent;
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                volume-touch := TouchArea {
+                                    width: 90px;
+                                    height: 24px;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.volume = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                                        root.change-volume(root.volume);
+                                    }
+                                    moved => {
+                                        if (self.pressed) {
+                                            root.volume = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                                            root.change-volume(root.volume);
+                                        }
+                                    }
+                                    Rectangle {
+                                        y: (parent.height - self.height) / 2;
+                                        width: 100%;
+                                        height: volume-touch.has-hover ? 6px : 4px;
+                                        border-radius: 2px;
+                                        background: #4d4d4d;
+                                        animate height { duration: 120ms; }
+                                        Rectangle {
+                                            x: 0;
+                                            width: parent.width * root.volume;
+                                            height: 100%;
+                                            border-radius: 2px;
+                                            background: volume-touch.has-hover ? #1db954 : white;
+                                            animate background { duration: 150ms; }
+                                        }
+                                        if (volume-touch.has-hover): Rectangle {
+                                            x: (parent.width * root.volume) - 6px;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 12px;
+                                            height: 12px;
+                                            border-radius: 6px;
+                                            background: white;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

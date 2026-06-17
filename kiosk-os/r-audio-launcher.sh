@@ -24,9 +24,16 @@ if [ -f /etc/default/r-audio ]; then
     set +a
 fi
 
-# Function to check connectivity (resolve/ping Spotify API)
+# Function to check connectivity.
+# Spotify's edge sits behind a CDN that routinely drops ICMP, so `ping` gives
+# false negatives even when the network is fully up — which used to force the
+# whole retry loop below on every single boot. Check DNS resolution plus a TCP
+# connect to the HTTPS port instead: that's what the app actually needs, and it
+# returns the instant the connection is refused/accepted rather than waiting
+# out a ping timeout.
 check_connectivity() {
-    ping -c 1 -W 2 api.spotify.com &>/dev/null
+    getent hosts api.spotify.com >/dev/null 2>&1 || return 1
+    timeout 2 bash -c '</dev/tcp/api.spotify.com/443' >/dev/null 2>&1
 }
 
 # 1. Retry connectivity up to 3 times (5s apart) to handle slow DHCP

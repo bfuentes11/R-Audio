@@ -292,8 +292,6 @@ impl SpotifyApiService {
         if !first_status.is_success() {
             eprintln!("[api] /items page 0 failed: {} body={}", first_status,
                 first_body.chars().take(300).collect::<String>());
-            // Don't bail — still return what metadata gave us, just with
-            // empty tracks. Lets the user see the playlist exists.
             let final_data = (playlist_name, owner_name, cover_url, tracks);
             cache.save_playlist(playlist_id, snapshot_id, &final_data).await;
             return Ok(final_data);
@@ -312,9 +310,6 @@ impl SpotifyApiService {
         let parse_items = |page_json: &Value, tracks: &mut Vec<Track>| {
             if let Some(items) = page_json["items"].as_array() {
                 for item_node in items {
-                    // Spotify's actual /items response uses `track` for
-                    // the nested object (the docs say `item`, but the wire
-                    // format is `track`). Try both, fall back to raw.
                     let t_node = if !item_node["track"].is_null() {
                         &item_node["track"]
                     } else if !item_node["item"].is_null() {
@@ -335,7 +330,6 @@ impl SpotifyApiService {
         };
         parse_items(&first_json, &mut tracks);
 
-        // ── 3. Subsequent pages in parallel ───────────────────────────────
         if total_tracks > items_per_page {
             let num_pages = (total_tracks - 1) / items_per_page + 1;
             let mut join_set = tokio::task::JoinSet::new();

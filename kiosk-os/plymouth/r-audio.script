@@ -1,0 +1,29 @@
+# R-Audio boot splash — mirrors boot_splash.slint
+# Background #090f1c: rgb(9,15,28) → (0.035, 0.059, 0.110)
+
+Window.SetBackgroundTopColor(0.035, 0.059, 0.110);
+Window.SetBackgroundBottomColor(0.035, 0.059, 0.110);
+
+screen_width  = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+# ── Logo ──────────────────────────────────────────────────────────────────────
+logo.image  = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(Math.Int((screen_width  - logo.image.GetWidth())  / 2));
+logo.sprite.SetY(Math.Int((screen_height - logo.image.GetHeight()) / 2) - 35);
+
+# ── Wordmark ──────────────────────────────────────────────────────────────────
+wordmark.image  = Image.Text("R·Audio", 1.0, 1.0, 1.0, 1.0, "DejaVu Sans Bold 33");
+wordmark.sprite = Sprite(wordmark.image);
+wordmark.sprite.SetX(Math.Int((screen_width - wordmark.image.GetWidth()) / 2));
+wordmark.sprite.SetY(Math.Int(screen_height / 2) + 68);
+
+# ── Tagline ───────────────────────────────────────────────────────────────────
+tagline.image  = Image.Text("LOADING", 1.0, 1.0, 1.0, 0.33, "DejaVu Sans Bold 11");
+tagline.sprite = Sprite(tagline.image);
+tagline.sprite.SetX(Math.Int((screen_width - tagline.image.GetWidth()) / 2));
+tagline.sprite.SetY(Math.Int(screen_height / 2) + 112);
+
+fun refresh_callback() {}
+Plymouth.SetRefreshFunction(refresh_callback);

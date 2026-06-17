@@ -666,6 +666,118 @@ struct TrackItem {
 thread_local! {
     static SEARCH_RESULTS_MODEL: std::cell::RefCell<Option<std::rc::Rc<slint::VecModel<UITrack>>>> = std::cell::RefCell::new(None);
     static SPECTRUM_BANDS_MODEL: std::cell::RefCell<Option<std::rc::Rc<slint::VecModel<f32>>>> = std::cell::RefCell::new(None);
+    static UI_WEAK: std::cell::RefCell<Option<slint::Weak<MainWindow>>> = std::cell::RefCell::new(None);
+}
+
+/// Fast integer hash — gives pseudo-random floats from a particle index.
+#[inline]
+fn phash(mut x: u32) -> f32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x45d9f3b);
+    x ^= x >> 16;
+    x as f32 / u32::MAX as f32
+}
+
+/// Particle tunnel: 160 curved comet streaks radiating from center.
+/// Each streak uses a quadratic bezier with a slight perpendicular offset so
+/// particles arc gently as they fly outward, giving an organic vortex feel.
+/// Each streak also emits a short "tip" segment at the head so the leading
+/// edge gets double-rendered in every Slint layer — naturally brighter without
+/// needing a separate path property.
+/// Bass drives a subtle surge (all particles push outward on a beat).
+fn build_particle_tunnel(_bands: &[f32], spin_rad: f32) -> String {
+    // Pioneer DEH-P8250 VFD aesthetic: dense field of diamond pixels with long
+    // comet trails, flowing continuously independent of audio.
+    const N: usize = 200;
+    const CX: f32 = 450.0;
+    const CY: f32 = 300.0;
+    const MAX_R: f32 = 560.0;
+
+    let tau = std::f32::consts::TAU;
+    let mut path = String::with_capacity(N * 140);
+
+    for k in 0..N {
+        let k = k as u32;
+        let angle = phash(k * 7  + 1) * tau;
+        let speed = 0.22 + phash(k * 13 + 3) * 0.70;
+        let phase = phash(k * 19 + 5);
+        let lbias = 0.55 + phash(k * 31 + 7) * 1.6;  // long tail bias
+
+        let progress = ((spin_rad * speed / tau) + phase).fract();
+        let r_head = (progress * MAX_R).min(MAX_R + 18.0);
+
+        // Long flowing comet tail — grows as particle moves outward.
+        let streak_len = (3.0 + progress * 28.0) * lbias * (0.55 + speed * 0.65);
+        let r_tail = (r_head - streak_len).max(0.0);
+
+        let ca = angle.cos();
+        let sa = angle.sin();
+
+        let hx = CX + r_head * ca;
+        let hy = CY + r_head * sa;
+
+        // Comet tail streak.
+        path.push_str(&format!(
+            "M {:.1} {:.1} L {:.1} {:.1} ",
+            CX + r_tail * ca, CY + r_tail * sa, hx, hy,
+        ));
+
+        // Diamond pixel (◇) at the head — size grows with distance from center.
+        let ro = 1.6 + progress * 4.5;
+        path.push_str(&format!(
+            "M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1} Z ",
+            hx,      hy - ro,
+            hx + ro, hy,
+            hx,      hy + ro,
+            hx - ro, hy,
+        ));
+    }
+
+    path
+}
+
+/// 120 radial bars (gradient effect via layered rendering) + particle tunnel.
+/// Returns `(bars_path, tunnel_path)`.
+fn compute_mesh_path(bands: &[f32], spin_rad: f32) -> (String, String) {
+    const N_BARS: usize = 120;
+    const RING_R: f32 = 78.0;
+    const MAX_H: f32 = 50.0;
+    const MIN_H: f32 = 0.8;
+    const CX: f32 = 130.0;
+    const CY: f32 = 130.0;
+
+    let tunnel = build_particle_tunnel(bands, spin_rad);
+
+    let n = bands.len();
+    if n == 0 {
+        return (String::new(), tunnel);
+    }
+
+    let tau = std::f32::consts::TAU;
+    let mut bars = String::with_capacity(N_BARS * 48);
+
+    for i in 0..N_BARS {
+        let angle = i as f32 * tau / N_BARS as f32 + spin_rad;
+
+        let band_pos = (i as f32 / N_BARS as f32) * n as f32;
+        let lo = band_pos as usize % n;
+        let hi = (lo + 1) % n;
+        let t = band_pos - lo as f32;
+        let val = bands[lo] * (1.0 - t) + bands[hi] * t;
+
+        let shaped = val.powf(1.5);
+        let h = MIN_H + shaped * MAX_H;
+        let ca = angle.cos();
+        let sa = angle.sin();
+
+        bars.push_str(&format!(
+            "M {:.1} {:.1} L {:.1} {:.1} ",
+            CX + RING_R * ca, CY + RING_R * sa,
+            CX + (RING_R + h) * ca, CY + (RING_R + h) * sa,
+        ));
+    }
+
+    (bars, tunnel)
 }
 
 async fn process_tracks(
@@ -902,15 +1014,24 @@ fn spawn_volume_key_listener(_ui_handle: slint::Weak<MainWindow>) {
 // Power button (KEY_POWER)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Short press (<3 s):
-//   • Song playing  → activate screensaver
-//   • No song       → suspend immediately
-// Long press (≥3 s) → power off
+// Quick press (released before the hold threshold):
+//   • Song playing → activate the screensaver
+//   • No song      → suspend (sleep)
+// Hold (≥ HOLD_OVERLAY_MS, still pressed) → reveal the on-screen power overlay
+//     with Cancel / Restart / Shutdown.
+// Continuous hold for HOLD_SHUTDOWN_SECS → force power off, even if the user
+//     never lifts their finger to tap the overlay.
 //
-// systemd handles suspend/poweroff so no root is required as long as the
+// systemd handles suspend/poweroff/reboot so no root is required as long as the
 // kiosk user is a member of the `sudo` group or polkit allows the action.
-// We use `systemctl suspend` / `systemctl poweroff` to keep it consistent
-// with how the rest of the system manages power.
+// We use `systemctl suspend` / `systemctl poweroff` / `systemctl reboot` to
+// keep it consistent with how the rest of the system manages power.
+
+/// How long the power button must be held before the Cancel/Restart/Shutdown
+/// overlay appears. Shorter than this counts as a quick press → suspend.
+const HOLD_OVERLAY_MS: u64 = 600;
+/// Continuous hold duration that forces an unconditional shutdown.
+const HOLD_SHUTDOWN_SECS: u64 = 10;
 
 #[cfg(target_os = "linux")]
 fn spawn_power_button_listener(ui_handle: slint::Weak<MainWindow>) {
@@ -953,16 +1074,41 @@ fn spawn_power_button_listener(ui_handle: slint::Weak<MainWindow>) {
                                 }
                                 match event.value() {
                                     1 => {
-                                        // Press: start long-press watchdog
+                                        // Press. Arm two watchdogs, both gated on the
+                                        // button still being held when they fire:
+                                        //   • at HOLD_OVERLAY_MS → show the power overlay
+                                        //   • at HOLD_SHUTDOWN_SECS → force power off
                                         pressed.store(true, Ordering::SeqCst);
-                                        let pressed2 = Arc::clone(&pressed);
-                                        let ui2 = ui.clone();
+
+                                        let pressed_overlay = Arc::clone(&pressed);
+                                        let ui_overlay = ui.clone();
                                         std::thread::spawn(move || {
-                                            std::thread::sleep(std::time::Duration::from_secs(3));
-                                            if pressed2.load(Ordering::SeqCst) {
-                                                println!("[power] Long press → power off");
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                HOLD_OVERLAY_MS,
+                                            ));
+                                            if pressed_overlay.load(Ordering::SeqCst) {
+                                                println!("[power] Hold → showing power overlay");
                                                 let _ = slint::invoke_from_event_loop(move || {
-                                                    if let Some(u) = ui2.upgrade() {
+                                                    if let Some(u) = ui_overlay.upgrade() {
+                                                        u.set_power_overlay_active(true);
+                                                    }
+                                                });
+                                            }
+                                        });
+
+                                        let pressed_shutdown = Arc::clone(&pressed);
+                                        let ui_shutdown = ui.clone();
+                                        std::thread::spawn(move || {
+                                            std::thread::sleep(std::time::Duration::from_secs(
+                                                HOLD_SHUTDOWN_SECS,
+                                            ));
+                                            if pressed_shutdown.load(Ordering::SeqCst) {
+                                                println!(
+                                                    "[power] {}s hold → power off",
+                                                    HOLD_SHUTDOWN_SECS
+                                                );
+                                                let _ = slint::invoke_from_event_loop(move || {
+                                                    if let Some(u) = ui_shutdown.upgrade() {
                                                         u.invoke_invoke_poweroff();
                                                     }
                                                 });
@@ -970,21 +1116,28 @@ fn spawn_power_button_listener(ui_handle: slint::Weak<MainWindow>) {
                                         });
                                     }
                                     0 => {
-                                        // Release: if watchdog hasn't fired yet, short press
+                                        // Release. If the overlay is already up, leave it
+                                        // for the user to choose Cancel/Restart/Shutdown.
+                                        // Otherwise this was a quick press:
+                                        //   • Song playing → activate the screensaver
+                                        //   • No song      → suspend (sleep)
                                         let was_pressed = pressed.swap(false, Ordering::SeqCst);
                                         if was_pressed {
                                             let ui2 = ui.clone();
                                             let _ = slint::invoke_from_event_loop(move || {
                                                 if let Some(u) = ui2.upgrade() {
-                                                    if u.get_player_track_title().is_empty() {
-                                                        u.invoke_invoke_sleep();
-                                                    } else {
-                                                        u.set_screensaver_active(true);
+                                                    if !u.get_power_overlay_active() {
+                                                        if u.get_player_track_title().is_empty() {
+                                                            u.invoke_invoke_sleep();
+                                                        } else {
+                                                            u.set_screensaver_active(true);
+                                                        }
                                                     }
                                                 }
                                             });
                                         }
                                     }
+                                    // value 2 = autorepeat while held; ignored.
                                     _ => {}
                                 }
                             }
@@ -1797,42 +1950,69 @@ fn spawn_dashboard_loader(
     });
 }
 
+/// Dedicated 60 Hz thread that animates the particle tunnel independently of
+/// audio. Nothing here touches the sample buffer or FFT — guaranteed smooth.
+fn spawn_particle_loop() {
+    std::thread::spawn(move || {
+        let mut spin: f32 = 0.0;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            spin += 0.55_f32.to_radians();
+            let tips_path = build_particle_tunnel(&[], spin);
+            let _ = slint::invoke_from_event_loop(move || {
+                UI_WEAK.with(|w| {
+                    if let Some(ref weak) = *w.borrow() {
+                        if let Some(ui) = weak.upgrade() {
+                            ui.set_player_viz_path_tips(tips_path.into());
+                        }
+                    }
+                });
+            });
+        }
+    });
+}
+
 fn spawn_fft_loop(
     sample_buffer: Arc<std::sync::Mutex<std::collections::VecDeque<f32>>>,
     is_playing_atom: Arc<std::sync::atomic::AtomicBool>,
 ) {
     std::thread::spawn(move || {
         let mut analyzer = spectrum_analyzer::SpectrumAnalyzer::new();
-        // Reused scratch buffer for the snapshot we hand to the analyzer.
-        // Sized to the capture buffer max so it never reallocates.
         let mut snapshot: Vec<f32> = Vec::with_capacity(spectrum_analyzer::CAPTURE_BUFFER_LEN);
-        // Track the last bands we pushed to Slint so we can skip identical frames.
         let mut last_sent: Vec<f32> = vec![0.0f32; spectrum_analyzer::NUM_BANDS];
-        // Whether we already sent the all-zeros frame on pause entry.
         let mut sent_pause_zeros = false;
+        // spin is now owned by spawn_particle_loop; use a local stub for bar geometry.
+        let mut spin: f32 = 0.0;
         loop {
             if !is_playing_atom.load(std::sync::atomic::Ordering::Relaxed) {
                 if !sent_pause_zeros {
-                    // Send zeros once on pause entry, then go idle.
                     analyzer.reset();
                     last_sent.fill(0.0);
                     let zeros = vec![0.0f32; spectrum_analyzer::NUM_BANDS];
+                    let (empty_path, _) = compute_mesh_path(&zeros, spin);
                     let _ = slint::invoke_from_event_loop(move || {
                         SPECTRUM_BANDS_MODEL.with(|m| {
                             if let Some(ref model) = *m.borrow() {
                                 model.set_vec(zeros);
                             }
                         });
+                        UI_WEAK.with(|w| {
+                            if let Some(ref weak) = *w.borrow() {
+                                if let Some(ui) = weak.upgrade() {
+                                    ui.set_player_viz_path(empty_path.into());
+                                }
+                            }
+                        });
                     });
                     sent_pause_zeros = true;
                 }
-                // Sleep much longer while paused — no audio to process.
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 continue;
             }
-            // Music is playing: resume normal 30 Hz cadence.
             sent_pause_zeros = false;
             std::thread::sleep(std::time::Duration::from_millis(33));
+
+            spin += 1.0_f32.to_radians();
 
             snapshot.clear();
             {
@@ -1846,8 +2026,6 @@ fn spawn_fft_loop(
 
             let new_bands = analyzer.process(&snapshot);
 
-            // Skip the Slint set_vec + re-render when bands haven't changed
-            // meaningfully (e.g. near-silent passages).
             const EPSILON: f32 = 0.005;
             let changed = new_bands
                 .iter()
@@ -1859,17 +2037,23 @@ fn spawn_fft_loop(
             }
 
             let raw_vec: Vec<f32> = new_bands.to_vec();
-            // Mirror horizontally: reverse the first half, then append it
-            // forward, so the display is symmetric around the center.
             let half = raw_vec.len() / 2;
             let bands_vec: Vec<f32> = raw_vec[..half].iter().rev().cloned()
                 .chain(raw_vec[..half].iter().cloned())
                 .collect();
             last_sent.clone_from(&raw_vec);
+            let (mesh_path, _) = compute_mesh_path(&bands_vec, spin);
             let _ = slint::invoke_from_event_loop(move || {
                 SPECTRUM_BANDS_MODEL.with(|m| {
                     if let Some(ref model) = *m.borrow() {
                         model.set_vec(bands_vec);
+                    }
+                });
+                UI_WEAK.with(|w| {
+                    if let Some(ref weak) = *w.borrow() {
+                        if let Some(ui) = weak.upgrade() {
+                            ui.set_player_viz_path(mesh_path.into());
+                        }
                     }
                 });
             });
@@ -1899,6 +2083,9 @@ async fn main() -> Result<(), slint::PlatformError> {
     let initial_vol = 0.25;
     ui.set_player_volume(initial_vol);
 
+    // ── Particle tunnel animation (runs forever, independent of audio) ────
+    spawn_particle_loop();
+
     // ── Hardware volume key listener ──────────────────────────────────────
     spawn_volume_key_listener(ui.as_weak());
 
@@ -1916,6 +2103,12 @@ async fn main() -> Result<(), slint::PlatformError> {
         println!("[power] Powering off system…");
         let _ = std::process::Command::new("systemctl")
             .arg("poweroff")
+            .status();
+    });
+    ui.on_invoke_restart(|| {
+        println!("[power] Restarting system…");
+        let _ = std::process::Command::new("systemctl")
+            .arg("reboot")
             .status();
     });
 
@@ -1959,6 +2152,9 @@ async fn main() -> Result<(), slint::PlatformError> {
     ui.set_player_spectrum_bands(bands_model.clone().into());
     SPECTRUM_BANDS_MODEL.with(|m| {
         *m.borrow_mut() = Some(bands_model);
+    });
+    UI_WEAK.with(|w| {
+        *w.borrow_mut() = Some(ui.as_weak());
     });
 
     let ui_handle = ui.as_weak();
@@ -3065,17 +3261,20 @@ async fn main() -> Result<(), slint::PlatformError> {
                                 // Move `buf` into the blocking task; clone the SharedPixelBuffer
                                 // (Arc-only, O(1)) for the UI closure so no pixel data is copied.
                                 let buf_for_ui = buf.clone();
-                                let gradient = tokio::task::spawn_blocking(move || {
+                                let colors = tokio::task::spawn_blocking(move || {
                                     let (h, s, v) = utils::extract_dominant_hsv(&buf);
-                                    utils::build_album_gradient_image(h, s, v)
+                                    let gradient = utils::build_album_gradient_image(h, s, v);
+                                    let accent = utils::hsv_to_accent_rgb(h, s, v);
+                                    (gradient, accent)
                                 })
                                 .await
                                 .ok();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(ui) = ui_img.upgrade() {
                                         ui.set_player_album_cover(slint::Image::from_rgba8(buf_for_ui));
-                                        if let Some(gradient) = gradient {
+                                        if let Some((gradient, (r, g, b))) = colors {
                                             ui.set_player_bg_image(slint::Image::from_rgba8(gradient));
+                                            ui.set_player_accent_color(slint::Color::from_rgb_u8(r, g, b));
                                         }
                                     }
                                 });

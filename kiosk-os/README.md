@@ -24,11 +24,11 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
      ▼
 [late_command → postinstall.sh:
    - Copies r-audio binaries + xinitrc + bash_profile
-   - dpkg -i ALL bundled .debs (openbox, plymouth, pulseaudio, onboard,
-                                 bluez-tools, libfontconfig1, libfreetype6,
+   - dpkg -i ALL bundled .debs (openbox, pulseaudio, bluez-tools,
+                                 libfontconfig1, libfreetype6,
                                  libxkbcommon-x11-0, etc.)
-   - Stages + activates Plymouth Rust-logo theme
-   - update-initramfs + update-grub (splash takes effect on first real boot)]
+   - Configures silent boot (quiet kernel, hidden GRUB, no Plymouth)
+   - update-initramfs + update-grub (takes effect on first real boot)]
      │
      ▼
 [d-i ejects USB, reboots into fully-equipped installed system]
@@ -36,10 +36,11 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 
 ### First boot from internal disk — Wi-Fi + Spotify OOBE
 ```
-[Plymouth pulsing-Rust-logo splash → autologin → startx]
+[Silent black boot (no splash) → autologin → startx]
      │
      ▼
-[xinitrc starts openbox + onboard + r-audio FULLSCREEN]
+[xinitrc starts openbox + r-audio FULLSCREEN
+   (on-screen keyboard is rendered in-process by r-audio)]
      │
      ▼
 [r-audio detects first run → starts Wi-Fi hotspot "R-Audio-Setup"]
@@ -56,7 +57,7 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 
 ### Every boot after that
 ```
-[Plymouth splash → autologin → startx → openbox → r-audio]
+[Silent black boot → autologin → startx → openbox → r-audio]
      │
      ▼
 [r-audio loads cached Spotify token, goes straight to player]
@@ -70,12 +71,11 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 |---|---|
 | `build-iso.sh` | Downloads Debian DVD1, **pre-fetches extra .debs via Docker container**, runs xorriso to graft payload + debs onto the ISO |
 | `preseed.cfg` | d-i answer file — installs only minimal DVD1 base; everything else comes from bundled .debs |
-| `postinstall.sh` | Runs from preseed `late_command`; installs r-audio binaries, dpkg-installs bundled .debs, activates Plymouth theme |
-| `xinitrc` | X11 startup — runs openbox + onboard + r-audio-launcher |
+| `postinstall.sh` | Runs from preseed `late_command`; installs r-audio binaries, dpkg-installs bundled .debs, configures silent boot |
+| `xinitrc` | X11 startup — runs openbox + r-audio-launcher |
 | `r-audio-launcher.sh` | Pre-flight connectivity check, then exec's r-audio |
 | `r-audio.service` | systemd unit (manual dev use only; the autologin/startx chain is the kiosk path) |
 | `r-audio.env.template` | Env vars (Spotify keys, Last.fm key, Slint settings) — copied to `/etc/default/r-audio` |
-| `plymouth-theme/` | Source SVG + `.plymouth` + `.script` for the pulsing-Rust-logo boot splash |
 
 ---
 
@@ -93,14 +93,16 @@ The ISO is built by **remastering the official Debian DVD1** (xorriso graft of o
 
 **Pre-bundled into the ISO as `.debs` (build-iso.sh → Docker download → /r-audio-debs/ → postinstall.sh `dpkg -i`):**
 - `openbox` — window manager
-- `onboard` — touchscreen on-screen keyboard
 - `pulseaudio` — audio server
+- `dbus` — session/system bus (xinitrc runs the session under `dbus-run-session`)
 - `libavahi-compat-libdnssd1` — Bonjour compat lib for librespot
 - `bluez`, `bluez-tools` — Bluetooth stack + diagnostics
 - `iw`, `rfkill` — Wi-Fi diagnostics
-- `plymouth`, `plymouth-themes` — graphical boot splash
+- `dnsmasq-base` — DHCP/DNS for the first-boot "R-Audio-Setup" hotspot
 - `xserver-xorg-legacy` — setuid X wrapper so non-root kiosk user can start X
 - `libfontconfig1`, `libfreetype6`, `libxkbcommon0`, `libxkbcommon-x11-0`, `libegl1`, `libgles2`, `libgl1`, `libglib2.0-0`, `libssl3` — r-audio runtime libs
+
+> The on-screen keyboard is rendered **in-process** by r-audio (a Slint `VirtualKeyboard`), so no external keyboard package (`onboard` and its GTK/AT-SPI stack) is bundled anymore. Boot uses a plain silent black screen until r-audio's UI paints, so there's no Plymouth either.
 
 **Why bundle instead of listing in preseed?** The d-i "Select and install software" step fails hard if even one package in `pkgsel/include` isn't on DVD1. We'd been playing whack-a-mole with that. Now `build-iso.sh` spins up a Debian trixie Docker container, runs `apt-get install --download-only` which uses apt's resolver to fetch the **complete dep tree**, and bakes every resulting `.deb` into the ISO. Postinstall runs `dpkg -i *.deb` to install them all offline. Same strategy FAI uses — never debug "is X on DVD1?" again.
 
@@ -121,7 +123,7 @@ If you have an x86_64 Linux machine (NOT ARM — this won't work on Apple Silico
 ```bash
 # Dependencies
 sudo apt-get install -y gcc libasound2-dev libssl-dev pkg-config \
-    libdbus-1-dev libfontconfig1-dev xorriso wget librsvg2-bin
+    libdbus-1-dev libfontconfig1-dev xorriso wget
 
 # Build binaries
 cargo build --release --target x86_64-unknown-linux-gnu
@@ -201,9 +203,9 @@ SLINT_FULLSCREEN=1
 SLINT_SCALE_FACTOR=2.0
 ```
 
-### Plymouth theme
+### Boot appearance
 
-The pulsing Rust logo lives at `plymouth-theme/`. Edit `r-audio.script` to tune the animation (`progress = progress + 0.04` controls speed; the `0.275 * Math.Sin(...)` term controls pulse depth). The SVG is rasterized to PNG at build time by `build-iso.sh` via `rsvg-convert`.
+There is no Plymouth splash. `postinstall.sh` configures a silent boot — `quiet loglevel=0`, a hidden zero-timeout GRUB menu, and a suppressed VT cursor — so the screen stays black from GRUB until r-audio's own Slint UI paints. Tune the kernel cmdline in the `GRUB_CMDLINE_LINUX_DEFAULT` line of `postinstall.sh` if you need to surface boot messages for debugging.
 
 ---
 

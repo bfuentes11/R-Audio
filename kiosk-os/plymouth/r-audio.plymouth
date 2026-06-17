@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=R-Audio
+Description=R-Audio Kiosk boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/r-audio
+ScriptFile=/usr/share/plymouth/themes/r-audio/r-audio.script

@@ -51,8 +51,7 @@ jobs:
             libdbus-1-dev \
             libfontconfig1-dev \
             xorriso \
-            wget \
-            librsvg2-bin
+            wget
 
       # ── 4b. Cache compiled R-Audio binaries ───────────────────────────────
       # When iterating on kiosk-os/* files only, the Rust binaries don't change
@@ -68,8 +67,8 @@ jobs:
           key: r-audio-bins-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'build.rs', 'src/**', 'ui/**', 'material-1.0/**') }}
 
       # ── 4c. Cache the bundled .deb packages ───────────────────────────────
-      # build-iso.sh's Docker step downloads ~500 MB of .debs (openbox,
-      # plymouth, pulseaudio, etc.) every run. Cache them, keyed on
+      # build-iso.sh's Docker step downloads the bundled .debs (openbox,
+      # pulseaudio, bluez, etc.) every run. Cache them, keyed on
       # build-iso.sh so any package-list change busts the cache automatically.
       - name: Cache bundled .deb packages
         uses: actions/cache@v4
